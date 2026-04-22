@@ -18,8 +18,11 @@
 
 #include "quote0_pins.h"
 
+#define Q0_EPD_RAM_WIDTH 296
+#define Q0_EPD_RAM_HEIGHT 152
+#define Q0_EPD_RAM_BYTES ((Q0_EPD_RAM_WIDTH * Q0_EPD_RAM_HEIGHT) / 8)
 #define EPD_SPI_HOST SPI2_HOST
-#define EPD_SPI_CLOCK_HZ (4 * 1000 * 1000)
+#define EPD_SPI_CLOCK_HZ (15 * 1000 * 1000)
 
 static spi_device_handle_t s_epd;
 static bool s_bus_ready;
@@ -38,7 +41,7 @@ static void epd_write_command(uint8_t command)
 {
     gpio_set_level(Q0_EPD_PIN_DC, 0);
     gpio_set_level(Q0_EPD_PIN_CS, 0);
-    spi_transaction_t tx = { .length = 8, .tx_buffer = &command };
+    spi_transaction_t tx = {.length = 8, .tx_buffer = &command};
     (void)spi_device_polling_transmit(s_epd, &tx);
     gpio_set_level(Q0_EPD_PIN_CS, 1);
 }
@@ -47,7 +50,7 @@ static void epd_write_data_byte(uint8_t data)
 {
     gpio_set_level(Q0_EPD_PIN_DC, 1);
     gpio_set_level(Q0_EPD_PIN_CS, 0);
-    spi_transaction_t tx = { .length = 8, .tx_buffer = &data };
+    spi_transaction_t tx = {.length = 8, .tx_buffer = &data};
     (void)spi_device_polling_transmit(s_epd, &tx);
     gpio_set_level(Q0_EPD_PIN_CS, 1);
 }
@@ -58,7 +61,7 @@ static void epd_write_data(const uint8_t *data, size_t len)
     gpio_set_level(Q0_EPD_PIN_CS, 0);
     while (len > 0) {
         size_t chunk = len > 4096 ? 4096 : len;
-        spi_transaction_t tx = { .length = chunk * 8, .tx_buffer = data };
+        spi_transaction_t tx = {.length = chunk * 8, .tx_buffer = data};
         (void)spi_device_polling_transmit(s_epd, &tx);
         data += chunk;
         len -= chunk;
@@ -67,6 +70,22 @@ static void epd_write_data(const uint8_t *data, size_t len)
 }
 
 static bool epd_wait_idle(uint32_t timeout_ms)
+{
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_ms) {
+        epd_write_command(0x71);
+        if (gpio_get_level(Q0_EPD_PIN_BUSY) != 0) {
+            delay_ms(50);
+            return true;
+        }
+        delay_ms(10);
+        elapsed += 10;
+    }
+
+    return false;
+}
+
+static bool epd_wait_idle_after_refresh(uint32_t timeout_ms)
 {
     uint32_t elapsed = 0;
     while (gpio_get_level(Q0_EPD_PIN_BUSY) == 0) {
@@ -82,47 +101,79 @@ static bool epd_wait_idle(uint32_t timeout_ms)
 
 static void epd_reset(void)
 {
-    gpio_set_level(Q0_EPD_PIN_RST, 0);
-    delay_ms(1);
     gpio_set_level(Q0_EPD_PIN_RST, 1);
-    delay_ms(200);
+    delay_ms(10);
+    gpio_set_level(Q0_EPD_PIN_RST, 0);
+    delay_ms(10);
+    gpio_set_level(Q0_EPD_PIN_RST, 1);
+    delay_ms(10);
 }
 
-static void epd_controller_init(void)
+static esp_err_t epd_controller_init(void)
 {
     if (s_ctrl_inited) {
-        return;
+        return ESP_OK;
     }
-    s_ctrl_inited = true;
 
+    gpio_set_level(Q0_EPD_PIN_PWR, 0);
+    gpio_set_level(Q0_EPD_PIN_RST, 0);
+    delay_ms(500);
+    gpio_set_level(Q0_EPD_PIN_RST, 1);
+    delay_ms(20);
     gpio_set_level(Q0_EPD_PIN_PWR, 1);
     delay_ms(100);
 
     epd_reset();
 
-    epd_wait_idle(5000);
-
-    epd_write_command(0x12);
     if (!epd_wait_idle(5000)) {
-        return;
+        return ESP_ERR_TIMEOUT;
     }
 
-    epd_write_command(0x11);
+    /* Sequence recovered from the stock Quote/0 firmware's UC8251D path. */
+    epd_write_command(0x00);
+    epd_write_data_byte(0xf3);
+    epd_write_data_byte(0x0e);
+
+    epd_write_command(0x01);
+    epd_write_data_byte(0x03);
+    epd_write_data_byte(0x00);
+    epd_write_data_byte(0x3f);
+    epd_write_data_byte(0x3f);
     epd_write_data_byte(0x03);
 
-    epd_write_command(0x44);
+    epd_write_command(0x06);
+    epd_write_data_byte(0x17);
+    epd_write_data_byte(0x17);
+    epd_write_data_byte(0x17);
+
+    epd_write_command(0x61);
+    epd_write_data_byte(0x98);
     epd_write_data_byte(0x01);
-    epd_write_data_byte((Q0_EPD_WIDTH + 7) / 8);
+    epd_write_data_byte(0x28);
 
-    epd_write_command(0x45);
-    epd_write_data_byte(0x00);
-    epd_write_data_byte(0x00);
-    epd_write_data_byte(Q0_EPD_HEIGHT & 0xff);
-    epd_write_data_byte((Q0_EPD_HEIGHT >> 8) & 0xff);
+    epd_write_command(0x30);
+    epd_write_data_byte(0x1b);
 
+    epd_write_command(0x60);
+    epd_write_data_byte(0x22);
+
+    epd_write_command(0x82);
+    epd_write_data_byte(0x00);
+
+    epd_write_command(0x03);
+    epd_write_data_byte(0x10);
+
+    epd_write_command(0x50);
+    epd_write_data_byte(0x97);
+
+    epd_write_command(0x04);
+    delay_ms(100);
     if (!epd_wait_idle(5000)) {
-        return;
+        return ESP_ERR_TIMEOUT;
     }
+
+    s_ctrl_inited = true;
+    return ESP_OK;
 }
 
 esp_err_t epd_init_bus(void)
@@ -187,13 +238,20 @@ esp_err_t epd_display_frame(const uint8_t *frame, size_t len)
 
     ESP_RETURN_ON_ERROR(epd_init_bus(), "epd", "epd_init_bus");
 
-    epd_controller_init();
+    ESP_RETURN_ON_ERROR(epd_controller_init(), "epd", "epd_controller_init");
 
-    epd_write_command(0x24);
+    static uint8_t white_frame[Q0_EPD_RAM_BYTES];
+    memset(white_frame, 0xff, sizeof(white_frame));
+
+    epd_write_command(0x10);
+    epd_write_data(white_frame, sizeof(white_frame));
+
+    epd_write_command(0x13);
     epd_write_data(frame, len);
 
-    epd_write_command(0x20);
-    if (!epd_wait_idle(60000)) {
+    epd_write_command(0x12);
+    delay_ms(100);
+    if (!epd_wait_idle_after_refresh(60000)) {
         return ESP_ERR_TIMEOUT;
     }
 
