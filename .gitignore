@@ -4,3 +4,5 @@ __pycache__/
 
 firmware/quote0-usb-epd/build/
 firmware/quote0-usb-epd/sdkconfig
+
+.codebuddy
