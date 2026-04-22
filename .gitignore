@@ -1,0 +1,6 @@
+.workspace/
+__pycache__/
+*.pyc
+
+firmware/quote0-usb-epd/build/
+firmware/quote0-usb-epd/sdkconfig

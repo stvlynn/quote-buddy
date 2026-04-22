@@ -1,0 +1,12 @@
+CONFIG_IDF_TARGET="esp32c3"
+
+# Keep the USB framebuffer protocol quiet. Exact option availability can vary
+# across ESP-IDF minor versions; unknown defaults are ignored by old `idf.py`.
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_ESP_CONSOLE_NONE=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
