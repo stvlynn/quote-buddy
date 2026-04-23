@@ -9,23 +9,83 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const os = require('os');
+const { spawn, spawnSync } = require('child_process');
 const { SerialPort } = require('serialport');
 
-const REPO_ROOT = path.resolve(__dirname, '..');
-const ESPTOOL_PY = path.join(
-    REPO_ROOT,
-    '.deps/espressif-tools/python_env/idf5.5_py3.9_env/bin/esptool.py'
-);
-const PYTHON_BIN = path.join(
-    REPO_ROOT,
-    '.deps/espressif-tools/python_env/idf5.5_py3.9_env/bin/python'
-);
-const CUSTOM_BUILD_DIR = path.join(
-    REPO_ROOT,
-    'firmware/quote0-usb-epd/build'
-);
-const STOCK_IMAGE_DEFAULT_HINT = path.join(REPO_ROOT, '.workspace');
+/* ------------------------------------------------------------------ */
+/* Resource resolution: support both dev (run from repo) and packaged  */
+/* ------------------------------------------------------------------ */
+
+const IS_PACKAGED = app.isPackaged;
+const REPO_ROOT = IS_PACKAGED ? null : path.resolve(__dirname, '..');
+
+// Dev-mode paths (inside the repo).
+const DEV_ESPTOOL_PY = REPO_ROOT
+    ? path.join(REPO_ROOT, '.deps/espressif-tools/python_env/idf5.5_py3.9_env/bin/esptool.py')
+    : null;
+const DEV_PYTHON_BIN = REPO_ROOT
+    ? path.join(REPO_ROOT, '.deps/espressif-tools/python_env/idf5.5_py3.9_env/bin/python')
+    : null;
+const DEV_CUSTOM_BUILD_DIR = REPO_ROOT
+    ? path.join(REPO_ROOT, 'firmware/quote0-usb-epd/build')
+    : null;
+const DEV_STOCK_HINT = REPO_ROOT ? path.join(REPO_ROOT, '.workspace') : null;
+
+// Packaged-mode paths (resources/firmware-resources/ inside the app bundle).
+const PACKAGED_RES_DIR = process.resourcesPath
+    ? path.join(process.resourcesPath, 'firmware-resources')
+    : null;
+
+/** Locate esptool.py + python. Packaged builds fall back to the user's PATH. */
+function resolveEsptool() {
+    // 1. Dev-mode bundled Python venv.
+    if (DEV_ESPTOOL_PY && fs.existsSync(DEV_ESPTOOL_PY)) {
+        return { python: DEV_PYTHON_BIN, esptoolPy: DEV_ESPTOOL_PY, source: 'bundled' };
+    }
+    // 2. System esptool.py on PATH.
+    const sys = spawnSync('which', ['esptool.py']);
+    if (sys.status === 0) {
+        const p = sys.stdout.toString().trim();
+        if (p) return { python: null, esptoolPy: p, source: 'system-esptool.py' };
+    }
+    // 3. System esptool (new style command).
+    const sysNew = spawnSync('which', ['esptool']);
+    if (sysNew.status === 0) {
+        const p = sysNew.stdout.toString().trim();
+        if (p) return { python: null, esptoolPy: null, systemCmd: p, source: 'system-esptool' };
+    }
+    return null;
+}
+
+/** Return paths to the three custom-firmware bin files. */
+function resolveCustomFirmware() {
+    const tryDir = (dir) => {
+        if (!dir) return null;
+        const bootloader = path.join(dir, 'bootloader.bin');
+        const partTable = path.join(dir, 'partition-table.bin');
+        const app = path.join(dir, 'quote0_usb_epd.bin');
+        // build/ layout: subdirs. packaged layout: flat next to each other.
+        const bootloaderSub = path.join(dir, 'bootloader', 'bootloader.bin');
+        const partTableSub = path.join(dir, 'partition_table', 'partition-table.bin');
+
+        if (fs.existsSync(bootloader) && fs.existsSync(partTable) && fs.existsSync(app)) {
+            return { dir, bootloader, partTable, app };
+        }
+        if (fs.existsSync(bootloaderSub) && fs.existsSync(partTableSub) && fs.existsSync(app)) {
+            return { dir, bootloader: bootloaderSub, partTable: partTableSub, app };
+        }
+        // Offset-prefixed flat layout used in release zip.
+        const flatB = path.join(dir, '0x0_bootloader.bin');
+        const flatP = path.join(dir, '0x8000_partition-table.bin');
+        const flatA = path.join(dir, '0x10000_quote0_usb_epd.bin');
+        if (fs.existsSync(flatB) && fs.existsSync(flatP) && fs.existsSync(flatA)) {
+            return { dir, bootloader: flatB, partTable: flatP, app: flatA };
+        }
+        return null;
+    };
+    return tryDir(DEV_CUSTOM_BUILD_DIR) || tryDir(PACKAGED_RES_DIR);
+}
 
 /* ------------------------------------------------------------------ */
 /* Protocol helpers                                                    */
@@ -132,13 +192,36 @@ function openAndExchange(portPath, exchange) {
 
 function runEsptool(args, onStdout) {
     return new Promise((resolve, reject) => {
-        const child = spawn(PYTHON_BIN, [ESPTOOL_PY, ...args], {
-            cwd: REPO_ROOT,
-        });
+        const resolved = resolveEsptool();
+        if (!resolved) {
+            return reject(new Error(
+                'esptool not found. Install it with:\n' +
+                '  python3 -m pip install --user esptool\n' +
+                'or make sure `esptool.py` is on your PATH.'
+            ));
+        }
 
+        let cmd, cmdArgs;
+        if (resolved.systemCmd) {
+            // system `esptool` (no .py) — call it directly.
+            cmd = resolved.systemCmd;
+            cmdArgs = args;
+        } else if (resolved.python) {
+            // bundled venv python + esptool.py script.
+            cmd = resolved.python;
+            cmdArgs = [resolved.esptoolPy, ...args];
+        } else {
+            // esptool.py somewhere on PATH — run with system python3.
+            cmd = 'python3';
+            cmdArgs = [resolved.esptoolPy, ...args];
+        }
+
+        onStdout('stdout', `$ ${cmd} ${cmdArgs.join(' ')}\n`);
+        const child = spawn(cmd, cmdArgs, {
+            cwd: REPO_ROOT || process.cwd(),
+        });
         child.stdout.on('data', (data) => onStdout('stdout', data.toString()));
         child.stderr.on('data', (data) => onStdout('stderr', data.toString()));
-
         child.on('error', reject);
         child.on('close', (code) => {
             if (code === 0) resolve();
@@ -148,17 +231,16 @@ function runEsptool(args, onStdout) {
 }
 
 function customAppFilesExist() {
-    return (
-        fs.existsSync(path.join(CUSTOM_BUILD_DIR, 'bootloader/bootloader.bin')) &&
-        fs.existsSync(path.join(CUSTOM_BUILD_DIR, 'partition_table/partition-table.bin')) &&
-        fs.existsSync(path.join(CUSTOM_BUILD_DIR, 'quote0_usb_epd.bin'))
-    );
+    return resolveCustomFirmware() != null;
 }
 
 async function flashCustom(port, onLog) {
-    if (!customAppFilesExist()) {
+    const fw = resolveCustomFirmware();
+    if (!fw) {
         throw new Error(
-            'Custom firmware not built. Run: firmware/flash_and_diag.sh --skip-flash'
+            'Custom firmware not found. Expected one of:\n' +
+            `  ${DEV_CUSTOM_BUILD_DIR || '(dev build dir n/a)'}\n` +
+            `  ${PACKAGED_RES_DIR || '(bundled firmware dir n/a)'}`
         );
     }
     const args = [
@@ -171,9 +253,9 @@ async function flashCustom(port, onLog) {
         '--flash_mode', 'dio',
         '--flash_freq', '80m',
         '--flash_size', '4MB',
-        '0x0', path.join(CUSTOM_BUILD_DIR, 'bootloader/bootloader.bin'),
-        '0x8000', path.join(CUSTOM_BUILD_DIR, 'partition_table/partition-table.bin'),
-        '0x10000', path.join(CUSTOM_BUILD_DIR, 'quote0_usb_epd.bin'),
+        '0x0', fw.bootloader,
+        '0x8000', fw.partTable,
+        '0x10000', fw.app,
     ];
     await runEsptool(args, onLog);
 }
@@ -266,22 +348,27 @@ ipcMain.handle('dialog:pickImage', async () => {
 });
 
 ipcMain.handle('dialog:pickStockImage', async () => {
+    const defaultPath =
+        DEV_STOCK_HINT && fs.existsSync(DEV_STOCK_HINT)
+            ? DEV_STOCK_HINT
+            : PACKAGED_RES_DIR && fs.existsSync(PACKAGED_RES_DIR)
+                ? PACKAGED_RES_DIR
+                : os.homedir();
     const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Select stock firmware (merged .bin)',
         properties: ['openFile'],
         filters: [{ name: 'Merged firmware image', extensions: ['bin'] }],
-        defaultPath: fs.existsSync(STOCK_IMAGE_DEFAULT_HINT)
-            ? STOCK_IMAGE_DEFAULT_HINT
-            : undefined,
+        defaultPath,
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
 });
 
 ipcMain.handle('firmware:customAvailable', async () => {
+    const fw = resolveCustomFirmware();
     return {
-        available: customAppFilesExist(),
-        buildDir: CUSTOM_BUILD_DIR,
+        available: fw != null,
+        buildDir: fw ? fw.dir : (DEV_CUSTOM_BUILD_DIR || PACKAGED_RES_DIR || 'n/a'),
     };
 });
 

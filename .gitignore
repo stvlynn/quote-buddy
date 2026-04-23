@@ -14,3 +14,5 @@ skills-lock.json
 desktop/node_modules/
 desktop/dist/
 desktop/out/
+
+.release/

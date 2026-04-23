@@ -1,14 +1,17 @@
 {
   "name": "quote0-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Quote/0 desktop control app: flash firmware, push framebuffers, configure text/image/compose layouts.",
   "private": true,
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --enable-logging"
+    "dev": "electron . --enable-logging",
+    "package:mac-arm64": "electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true",
+    "package:mac-x64": "electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true",
+    "package:linux": "electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true"
   },
-  "author": "quote-buddy",
+  "author": "stvlynn",
   "license": "MIT",
   "engines": {
     "node": ">=18"
@@ -17,6 +20,7 @@
     "serialport": "^12.0.0"
   },
   "devDependencies": {
+    "@electron/packager": "^20.0.0",
     "electron": "^33.0.0"
   }
 }
