@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; script-src 'self';" />
+    <title>Quote/0 Desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <header class="toolbar">
+        <div class="toolbar-group">
+            <label for="port-select">Port</label>
+            <select id="port-select"></select>
+            <button id="refresh-ports" type="button" title="Refresh ports">↻</button>
+        </div>
+
+        <div class="toolbar-group">
+            <button id="btn-ping" type="button">PING</button>
+            <button id="btn-status" type="button">STATUS</button>
+        </div>
+
+        <div class="toolbar-group">
+            <button id="btn-flash-stock" type="button">Flash stock…</button>
+            <button id="btn-flash-custom" type="button">Flash custom</button>
+        </div>
+
+        <div class="toolbar-group toolbar-spacer">
+            <span id="banner" class="muted">Quote/0 desktop</span>
+        </div>
+    </header>
+
+    <main class="layout">
+        <!-- LEFT: controls --------------------------------------------------- -->
+        <section class="panel controls">
+            <nav class="tabs">
+                <button class="tab active" data-tab="image">Image</button>
+                <button class="tab" data-tab="text">Text</button>
+                <button class="tab" data-tab="compose">Compose</button>
+            </nav>
+
+            <div class="tab-body">
+                <!-- Image tab -->
+                <div class="tab-panel active" data-tab-panel="image">
+                    <div class="field">
+                        <label>Source image</label>
+                        <div class="row">
+                            <button id="img-pick" type="button">Choose file…</button>
+                            <span id="img-path" class="muted ellipsis">No file selected</span>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="img-fit">Fit</label>
+                        <select id="img-fit">
+                            <option value="contain" selected>Contain</option>
+                            <option value="cover">Cover</option>
+                            <option value="stretch">Stretch</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="img-threshold">Threshold (<span id="img-threshold-value">160</span>)</label>
+                        <input type="range" id="img-threshold" min="0" max="255" value="160" />
+                    </div>
+                    <div class="field inline">
+                        <label><input type="checkbox" id="img-dither" /> Floyd-Steinberg dither</label>
+                    </div>
+                </div>
+
+                <!-- Text tab -->
+                <div class="tab-panel" data-tab-panel="text">
+                    <div class="field">
+                        <label for="text-title">Title</label>
+                        <input type="text" id="text-title" value="Quote/0" />
+                    </div>
+                    <div class="field">
+                        <label for="text-body">Body</label>
+                        <textarea id="text-body" rows="6"
+                                  placeholder="Anything. Line breaks are preserved."></textarea>
+                    </div>
+                    <div class="field">
+                        <label for="text-footer">Footer</label>
+                        <input type="text" id="text-footer" />
+                    </div>
+                    <div class="field">
+                        <label for="text-title-size">
+                            Title size (<span id="text-title-size-value">22</span>)
+                        </label>
+                        <input type="range" id="text-title-size" min="10" max="48" value="22" />
+                    </div>
+                    <div class="field">
+                        <label for="text-body-size">
+                            Body size (<span id="text-body-size-value">15</span>)
+                        </label>
+                        <input type="range" id="text-body-size" min="8" max="32" value="15" />
+                    </div>
+                    <div class="field inline">
+                        <label><input type="checkbox" id="text-border" checked /> Draw border</label>
+                    </div>
+                </div>
+
+                <!-- Compose tab -->
+                <div class="tab-panel" data-tab-panel="compose">
+                    <p class="muted compose-hint">
+                        JSON spec: optional <code>background</code>, <code>border</code>,
+                        and an <code>elements[]</code> array of
+                        <code>text</code>, <code>image</code>, <code>rect</code>,
+                        <code>line</code>. See
+                        <code>docs/firmware/quote0_usb_firmware.md</code>.
+                    </p>
+                    <div class="field">
+                        <textarea id="compose-json" rows="18" spellcheck="false"></textarea>
+                    </div>
+                    <div class="row">
+                        <button id="compose-load-sample" type="button">Load sample</button>
+                        <button id="compose-validate" type="button">Validate</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Shared layout + submit ------------------------------------- -->
+            <div class="field">
+                <label for="layout-select">Layout</label>
+                <select id="layout-select">
+                    <option value="native">Native (152×296)</option>
+                    <option value="native-180">Native 180°</option>
+                    <option value="landscape-left">Landscape left</option>
+                    <option value="landscape-right" selected>Landscape right (296×152)</option>
+                </select>
+            </div>
+
+            <div class="field inline">
+                <label><input type="checkbox" id="invert-checkbox" checked /> Invert before upload</label>
+            </div>
+
+            <div class="actions">
+                <button id="btn-preview" type="button">Redraw preview</button>
+                <button id="btn-send" type="button" class="primary">Send to Quote/0</button>
+            </div>
+        </section>
+
+        <!-- CENTER: preview -------------------------------------------------- -->
+        <section class="panel preview">
+            <div class="preview-header">
+                <span>Preview — 1:1 device pixels</span>
+                <span id="preview-size" class="muted">296 × 152</span>
+            </div>
+            <div class="preview-stage">
+                <!-- Canvas sized in JS after layout selection -->
+                <canvas id="preview-canvas" width="296" height="152"></canvas>
+            </div>
+            <p class="muted">
+                Pixels: <span id="preview-hash">—</span> ·
+                <span id="preview-info">Choose an image or pick a tab</span>
+            </p>
+        </section>
+
+        <!-- RIGHT: log / status --------------------------------------------- -->
+        <section class="panel status">
+            <div class="status-section">
+                <h3>Device reply</h3>
+                <pre id="reply-box" class="log device-reply">—</pre>
+            </div>
+            <div class="status-section grow">
+                <h3>
+                    Activity log
+                    <button id="log-clear" class="ghost" type="button">clear</button>
+                </h3>
+                <pre id="log-box" class="log"></pre>
+            </div>
+        </section>
+    </main>
+
+    <script src="renderer.js" type="module"></script>
+</body>
+</html>

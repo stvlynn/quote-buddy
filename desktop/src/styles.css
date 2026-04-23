@@ -1,0 +1,217 @@
+/* Quote/0 desktop — layout + dark-ish theme */
+
+:root {
+    --bg: #15181d;
+    --panel-bg: #1c2027;
+    --panel-border: #2a3040;
+    --text: #e8ecf2;
+    --text-muted: #8b94a7;
+    --accent: #5dade2;
+    --accent-strong: #2884c9;
+    --ok: #7fe3a1;
+    --err: #ff6b6b;
+    --input-bg: #0f1116;
+    --input-border: #2a3040;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* Toolbar ------------------------------------------------------------ */
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 14px;
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--panel-border);
+    flex-shrink: 0;
+}
+
+.toolbar-group { display: flex; align-items: center; gap: 6px; }
+.toolbar-spacer { margin-left: auto; }
+.toolbar label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
+
+/* Layout ------------------------------------------------------------- */
+
+.layout {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 340px 1fr 320px;
+    gap: 12px;
+    padding: 12px;
+    min-height: 0;
+}
+
+.panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.controls, .status { padding: 12px; gap: 12px; overflow-y: auto; }
+.preview { padding: 12px; }
+
+/* Tabs --------------------------------------------------------------- */
+
+.tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--panel-border);
+    margin-bottom: 10px;
+}
+.tab {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    border-bottom: 2px solid transparent;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.tab-body { flex: 1; min-height: 0; }
+.tab-panel { display: none; flex-direction: column; gap: 10px; }
+.tab-panel.active { display: flex; }
+
+/* Form -------------------------------------------------------------- */
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field.inline { flex-direction: row; align-items: center; gap: 8px; }
+.field label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
+
+input[type="text"],
+input[type="range"],
+textarea,
+select {
+    width: 100%;
+    background: var(--input-bg);
+    color: var(--text);
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+textarea { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 11px; resize: vertical; }
+
+input[type="range"] { padding: 0; }
+
+input[type="checkbox"] { margin: 0; }
+
+.row { display: flex; align-items: center; gap: 8px; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+
+/* Buttons ----------------------------------------------------------- */
+
+button {
+    background: #2a3040;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+}
+button:hover:not(:disabled) { background: #343b4e; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--accent-strong); border-color: var(--accent-strong); }
+button.primary:hover:not(:disabled) { background: var(--accent); }
+button.ghost { background: transparent; border: none; color: var(--text-muted); padding: 2px 6px; }
+
+.actions { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
+.actions button { flex: 1; }
+
+/* Preview ---------------------------------------------------------- */
+
+.preview-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+.preview-stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        linear-gradient(45deg, #0c0d10 25%, transparent 25%, transparent 75%, #0c0d10 75%, #0c0d10),
+        linear-gradient(45deg, #0c0d10 25%, transparent 25%, transparent 75%, #0c0d10 75%, #0c0d10);
+    background-color: #1a1d24;
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    overflow: auto;
+    padding: 16px;
+}
+
+#preview-canvas {
+    image-rendering: pixelated;
+    background: #fff;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    transform-origin: center;
+}
+
+/* Status panel ------------------------------------------------------ */
+
+.status-section { display: flex; flex-direction: column; min-height: 0; gap: 4px; }
+.status-section.grow { flex: 1; }
+.status-section h3 {
+    margin: 0 0 4px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: normal;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.log {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    padding: 8px;
+    margin: 0;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 80px;
+    max-height: 100%;
+}
+.device-reply { flex: 0 0 auto; min-height: 40px; max-height: 120px; }
+.log.ok { color: var(--ok); }
+.log.err { color: var(--err); }
+
+.muted { color: var(--text-muted); font-size: 11px; }
+.muted code { color: var(--text); }
+
+.compose-hint { margin: 0 0 8px 0; line-height: 1.5; }
