@@ -31,9 +31,31 @@ Either way, the display path is mature enough to handle controller detection and
 
 ## Live-unit panel size
 
-The current live unit has already been brought up in this repository as a `152 x 296`, 1-bit e-paper panel. That size is confirmed by the working custom firmware and test uploads.
+The current live unit has been brought up in this repository as a
+`152 x 296`, 1-bit e-paper panel, driven by the **UC8251D** controller at
+revision `0x0A`.  That identification is not inferred from strings — the
+stock `EPD_DETECT` log prints it on every boot:
 
-This specific resolution was verified during custom bring-up, not recovered directly from the stock string scan.
+```
+EPD_DETECT: IC型号: UC8251D, Revision: 0x0A (缓存)
+UC8251D: 初始化UC8251D (152x296), border_reg=0x97
+```
+
+A successful custom-firmware full refresh on the same unit takes ~1.8 s of
+wall-clock time, which matches the physical refresh timing reported by the
+stock firmware (`wait_busy: 等待 1160 ms`).
+
+### Confirmed pin map
+
+```
+SCLK=10  MOSI=7  CS=6  DC=5  RST=4  BUSY=3  PWR_EN=20
+```
+
+BUSY has no external pull resistor on this PCB, so it must be configured with
+the MCU's internal pull-up.  Forgetting the pull-up makes every wait-for-idle
+loop return instantly and produces a white panel even though the firmware
+reports success.  See
+[docs/firmware/white-screen-debug-journey.md](../firmware/white-screen-debug-journey.md).
 
 ## Power subsystem
 

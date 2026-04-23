@@ -5,4 +5,12 @@ __pycache__/
 firmware/quote0-usb-epd/build/
 firmware/quote0-usb-epd/sdkconfig
 
-.codebuddy
+.codebuddy/
+.deps/
+.agents/
+.claude/
+skills-lock.json
+
+desktop/node_modules/
+desktop/dist/
+desktop/out/

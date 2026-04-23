@@ -13,7 +13,8 @@ Target device:
 
 - MCU: ESP32-C3
 - USB: native USB Serial/JTAG, VID/PID `303a:1001`
-- Display controller: UC8251D / UC8151 compatible
+- Display controller: UC8251D (confirmed by the stock firmware boot log and by
+  a working custom-firmware full refresh of ~1.8 s)
 - Physical display buffer: `152 x 296`, 1 bit per pixel, `5624` bytes
 
 Observed Quote/0 pin map:
@@ -23,10 +24,16 @@ Observed Quote/0 pin map:
 | EPD SCLK | 10 | GPIO matrix output `FSPICLK` |
 | EPD MOSI / DIN | 7 | GPIO matrix output `FSPID` |
 | EPD CS | 6 | GPIO matrix output `FSPICS0` |
-| EPD BUSY | 3 | toggles during full refresh |
+| EPD BUSY | 3 | LOW while busy, HIGH when idle; needs **MCU internal pull-up** (no external pull on the PCB) |
 | EPD RST | 4 | toggles high-low-high at refresh start |
 | EPD DC | 5 | command/data select |
 | EPD POWER_EN | 20 | held high while display is active |
+
+If you bring up a different Quote/0 unit and the panel stays white, read
+[docs/firmware/white-screen-debug-journey.md](docs/firmware/white-screen-debug-journey.md)
+before touching the pin map — on the tested unit, the pin map above was
+already correct, and the BUSY-pull misconfiguration masqueraded as a
+pin-map problem for a long time.
 
 Full stock flash backup from the connected unit:
 
@@ -87,6 +94,8 @@ native `152x296` buffer:
 
 - `native`
 - `native-180`
+- `portrait` (alias of `native`)
+- `portrait-180` (alias of `native-180`)
 - `landscape-left`
 - `landscape-right`
 
@@ -98,13 +107,50 @@ python3 -m pip install Pillow
 python3 tools/quote0_send.py --image path.png --layout landscape-right
 ```
 
-## Raspberry Pi HTTP Bridge
+Use `--compose spec.json` to send a mixed layout with arbitrary text, images,
+and simple drawing primitives:
 
-Run this on a Raspberry Pi with Quote0 attached over USB:
+```json
+{
+  "layout": "landscape-right",
+  "background": "white",
+  "border": true,
+  "elements": [
+    {"type": "text", "x": 12, "y": 12, "w": 150, "h": 28, "text": "Claude Buddy", "font_size": 22},
+    {"type": "text", "x": 12, "y": 50, "w": 170, "h": 74, "text": "Waiting for permission. USB middleware can now mix text and images.", "font_size": 15},
+    {"type": "image", "x": 192, "y": 16, "w": 88, "h": 88, "path": "./avatar.png", "fit": "contain"},
+    {"type": "line", "x1": 12, "y1": 132, "x2": 282, "y2": 132, "width": 1},
+    {"type": "text", "x": 12, "y": 136, "w": 270, "h": 12, "text": "quote0 middleware", "font_size": 11}
+  ]
+}
+```
+
+```sh
+python3 tools/quote0_send.py --compose spec.json
+```
+
+On the tested Quote0 unit in this repository, the panel currently needs
+framebuffer inversion. Use `--invert` if the screen turns fully white:
+
+```sh
+python3 tools/quote0_send.py --text "Hello Quote0" --title "USB" --invert
+python3 tools/quote0_send.py --compose spec.json --invert
+```
+
+## Raspberry Pi HTTP Middleware
+
+Run this on a Raspberry Pi or desktop machine with Quote0 attached over USB:
 
 ```sh
 python3 -m pip install Pillow
 python3 tools/quote0_server.py --host 0.0.0.0 --http-port 8787
+```
+
+Inspect middleware capabilities:
+
+```sh
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/capabilities
 ```
 
 Push text:
@@ -113,6 +159,33 @@ Push text:
 curl -X POST http://127.0.0.1:8787/display/text \
   -H 'Content-Type: application/json' \
   --data '{"title":"Claude Buddy","body":"Waiting for permission","footer":"quote0"}'
+```
+
+Push an image:
+
+```sh
+curl -X POST http://127.0.0.1:8787/display/image \
+  -H 'Content-Type: application/json' \
+  --data '{"path":"./avatar.png","layout":"landscape-right"}'
+```
+
+Push a composed layout with text, image, and simple vector elements:
+
+```sh
+curl -X POST http://127.0.0.1:8787/display/compose \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "layout":"landscape-right",
+    "background":"white",
+    "border":true,
+    "elements":[
+      {"type":"text","x":12,"y":12,"w":150,"h":28,"text":"Claude Buddy","font_size":22},
+      {"type":"text","x":12,"y":50,"w":170,"h":74,"text":"Waiting for approval. Compose mode supports mixed content.","font_size":15},
+      {"type":"image","x":192,"y":16,"w":88,"h":88,"path":"./avatar.png","fit":"contain"},
+      {"type":"line","x1":12,"y1":132,"x2":282,"y2":132,"width":1},
+      {"type":"text","x":12,"y":136,"w":270,"h":12,"text":"quote0 middleware","font_size":11}
+    ]
+  }'
 ```
 
 Push a test pattern:

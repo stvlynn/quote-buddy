@@ -16,6 +16,35 @@ command dispatcher. Enabling `LOCAL_IMAGE_ON` does not make UART accept image
 payloads. For USB push, a custom application firmware is cleaner than patching
 the stock dispatcher.
 
+## Custom USB Text Protocol
+
+The custom firmware currently exposes:
+
+```
+Q0READY 152 296 1BPP rev=diag3                  # greeting, printed once at boot
+PING                              -> PONG
+STATUS | DIAG                     -> OK <diag string>
+GPIO SNAP                         -> OK <diag string>
+GPIO PWR|RST|DC|CS 0|1            -> OK <diag string>
+Q0IMG1 152 296 1BPP 5624 <crc32>  -> OK|ERR <diag string>
+<5624 raw framebuffer bytes>
+```
+
+The `<diag string>` has the stable shape:
+
+```
+stage=<last-stage> mode=<last-mode> busy=<level> err=<errno> bus=<0|1> pins=busy:N,pwr:N,rst:N,dc:N,cs:N
+```
+
+`ERR` prefixes:
+
+- `ERR bad-header` — no newline / junk on the wire
+- `ERR unsupported-header` — recognised the framing but it is not a command
+- `ERR short-frame` — fewer than 5624 bytes arrived
+- `ERR crc` — payload CRC32 mismatch
+- `ERR invalid-arg` / `ERR invalid-gpio` — argument validation
+- `ERR epd-timeout <diag>` / `ERR epd <diag>` — hardware-level failure
+
 ## Flash Layout From The Update Image
 
 The `2.0.8_merged_...bin` image is an ESP32-C3 merged image:
@@ -42,13 +71,30 @@ full path is verified on the actual panel.
 
 ## Verified Runtime Behavior
 
-On the tested unit:
+On the tested unit, running the current custom firmware (`rev=diag3`):
 
 - USB flashing works through native ESP32-C3 USB Serial/JTAG.
-- The custom protocol replies to `PING` with `PONG`.
-- Test framebuffer upload returns `OK`.
-- EPD `BUSY` polarity is low-while-busy, high-when-idle.
-- Full refresh works through the custom UC8251D path.
+- On boot the firmware writes `Q0READY 152 296 1BPP rev=diag3\n` once.
+- `PING` replies `PONG\n`.
+- `STATUS` / `DIAG` replies with a single line containing the last EPD stage,
+  last EPD result, and the live electrical level of every control pin, e.g.:
+
+  ```
+  OK stage=done mode=full busy=1 err=0 bus=1 pins=busy:1,pwr:1,rst:1,dc:0,cs:1
+  ```
+
+- `GPIO SNAP` re-reads the five EPD pins without driving them.
+- `GPIO PWR|RST|DC|CS 0|1` drives one control line and returns an updated
+  `STATUS` line.
+- A full refresh completes in **~1.8 s** wall-clock (matches the stock
+  firmware's `UC8251D: wait_busy: 等待 1160 ms` + power-on time).
+- EPD `BUSY` polarity is low-while-busy, high-when-idle.  The Quote/0 panel
+  does not externally pull BUSY; the driver configures the internal pull-up
+  (`GPIO_PULLUP_ENABLE`) to get a reliable idle level.  See
+  [white-screen-debug-journey.md](white-screen-debug-journey.md) for why this
+  matters.
+- Full refresh works through the custom UC8251D path with a white-border
+  register of `0x97` (same as stock).
 
 ## Claude Desktop Buddy Role
 
@@ -59,18 +105,38 @@ Quote0 has no physical buttons. Treat it as display-only:
 - Pi pushes the framebuffer over USB.
 - Approval/deny input lives on Pi GPIO buttons, keyboard hotkeys, or a local web UI.
 
-The included bridge is `tools/quote0_server.py`. It exposes:
+The included middleware is `tools/quote0_server.py`. It exposes:
 
 - `GET /health`
+- `GET /capabilities`
 - `POST /display/test`
 - `POST /display/text`
 - `POST /display/image`
+- `POST /display/compose`
+
+`/display/compose` is the new general-purpose endpoint. It accepts a JSON object
+with optional `background`, `border`, `layout`, `threshold`, and an `elements[]`
+array. Supported element types are:
+
+- `text`
+- `image`
+- `rect`
+- `line`
 
 Example:
 
 ```sh
-python3 tools/quote0_server.py --host 0.0.0.0 --http-port 8787
-curl -X POST http://127.0.0.1:8787/display/text \
+python3 tools/quote0_server.py --host 0.0.0.0 --http-port 8787 --invert
+curl -X POST http://127.0.0.1:8787/display/compose \
   -H 'Content-Type: application/json' \
-  --data '{"title":"Claude Buddy","body":"Waiting for permission"}'
+  --data '{
+    "layout":"landscape-right",
+    "background":"white",
+    "border":true,
+    "elements":[
+      {"type":"text","x":12,"y":12,"w":150,"h":28,"text":"Claude Buddy","font_size":22},
+      {"type":"text","x":12,"y":50,"w":170,"h":74,"text":"Waiting for permission.","font_size":15},
+      {"type":"image","x":192,"y":16,"w":88,"h":88,"path":"./avatar.png","fit":"contain"}
+    ]
+  }'
 ```

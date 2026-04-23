@@ -21,6 +21,9 @@ This directory collects the hardware conclusions, reverse-engineering notes, and
   - Claude Buddy adaptation notes, architecture, and implementation roadmap.
 - [`firmware/`](firmware)
   - Notes specific to the custom USB firmware path used in this repository.
+- [`methodology/`](methodology)
+  - Reusable playbooks distilled from actually debugging this project
+    (EPD bring-up on a closed PCB, reverse-engineering a vendor merged image).
 
 ## Document index
 
@@ -52,7 +55,23 @@ This directory collects the hardware conclusions, reverse-engineering notes, and
 ### `firmware/`
 
 - [`firmware/quote0_usb_firmware.md`](firmware/quote0_usb_firmware.md)
-  - Notes on the custom USB firmware path used in this repository.
+  - Notes on the custom USB firmware path used in this repository, including
+    the current protocol surface (`PING`, `STATUS`, `GPIO`, `Q0IMG1`).
+- [`firmware/white-screen-debug-journey.md`](firmware/white-screen-debug-journey.md)
+  - Post-mortem of the multi-session debug that ended with a working custom
+    firmware; contains the one-line root cause (BUSY needs an internal
+    pull-up) and the decisive experiments in order.
+
+### `methodology/`
+
+- [`methodology/epd-hardware-bringup-playbook.md`](methodology/epd-hardware-bringup-playbook.md)
+  - How to debug an e-paper display that stays white in an `ESP_LOG`-disabled
+    ESP-IDF project.  Principles, decision tree, and the "refresh faster
+    than physical minimum ⇒ fake BUSY" heuristic.
+- [`methodology/stock-image-reverse-engineering-playbook.md`](methodology/stock-image-reverse-engineering-playbook.md)
+  - How to extract hardware-truthful facts (controller ID, pin map, NVS
+    configuration, timing) from a closed vendor firmware when the device
+    is on your desk.
 
 ## Recommended reading order
 
@@ -67,6 +86,15 @@ If you are new to the project, read the files in this order:
 7. `buddy/quote0-buddy-architecture.md`
 8. `buddy/quote0-buddy-roadmap.md`
 9. `firmware/quote0_usb_firmware.md`
+10. `firmware/white-screen-debug-journey.md`
+11. `methodology/epd-hardware-bringup-playbook.md`
+12. `methodology/stock-image-reverse-engineering-playbook.md`
+
+If you are here specifically to debug a non-working Quote/0, jump directly
+to `firmware/white-screen-debug-journey.md` and follow its reproduction
+section.  The two `methodology/` documents are the generalised rules that
+debug session produced and are the right starting point for a different
+ESP-IDF EPD project.
 
 ## Scope
 
