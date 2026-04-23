@@ -9,12 +9,18 @@
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 
+#include "epd_uc8251d.h"
 #include "quote0_pins.h"
 
 #define RX_TIMEOUT_TICKS pdMS_TO_TICKS(100)
 #define HEADER_MAX 96
+#define PROTOCOL_BANNER "Q0READY 152 296 1BPP rev=diag3\n"
 
 static uint8_t s_frame[Q0_EPD_FRAME_BYTES];
+
+/* ------------------------------------------------------------------------- */
+/* Low-level IO                                                               */
+/* ------------------------------------------------------------------------- */
 
 static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t len)
 {
@@ -32,6 +38,28 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t len)
 static void write_all(const char *s)
 {
     usb_serial_jtag_write_bytes((const uint8_t *)s, strlen(s), pdMS_TO_TICKS(1000));
+}
+
+static void write_status_prefix(const char *prefix)
+{
+    char status[192];
+    char response[256];
+    epd_format_status(status, sizeof(status));
+    snprintf(response, sizeof(response), "%s %s\n", prefix, status);
+    write_all(response);
+}
+
+static void write_epd_result(esp_err_t err)
+{
+    if (err == ESP_OK) {
+        write_status_prefix("OK");
+    } else if (err == ESP_ERR_TIMEOUT) {
+        write_status_prefix("ERR epd-timeout");
+    } else if (err == ESP_ERR_INVALID_ARG) {
+        write_status_prefix("ERR invalid-arg");
+    } else {
+        write_status_prefix("ERR epd");
+    }
 }
 
 static int read_byte_blocking(uint8_t *byte)
@@ -82,7 +110,11 @@ static bool read_exact(uint8_t *buf, size_t len)
     return true;
 }
 
-static bool parse_header(const char *header, uint32_t *expected_crc)
+/* ------------------------------------------------------------------------- */
+/* Command handlers                                                           */
+/* ------------------------------------------------------------------------- */
+
+static bool parse_image_header(const char *header, uint32_t *expected_crc)
 {
     char fmt[8] = {0};
     unsigned width = 0;
@@ -90,7 +122,8 @@ static bool parse_header(const char *header, uint32_t *expected_crc)
     unsigned len = 0;
     unsigned crc = 0;
 
-    int fields = sscanf(header, "Q0IMG1 %u %u %7s %u %x", &width, &height, fmt, &len, &crc);
+    int fields = sscanf(header, "Q0IMG1 %u %u %7s %u %x",
+                        &width, &height, fmt, &len, &crc);
     if (fields != 5) {
         return false;
     }
@@ -104,14 +137,67 @@ static bool parse_header(const char *header, uint32_t *expected_crc)
     return true;
 }
 
-void protocol_task(frame_handler_t handler)
+static bool handle_gpio_command(const char *header)
 {
+    if (strcmp(header, "GPIO SNAP") == 0) {
+        write_status_prefix("OK");
+        return true;
+    }
+
+    char pin[8] = {0};
+    int level = -1;
+    if (sscanf(header, "GPIO %7s %d", pin, &level) == 2) {
+        write_epd_result(epd_set_output_pin(pin, level));
+        return true;
+    }
+
+    write_all("ERR invalid-gpio\n");
+    return true;
+}
+
+/* Returns true when the line was recognized as a text command and replied to. */
+static bool handle_text_command(const char *header)
+{
+    if (strcmp(header, "PING") == 0) {
+        write_all("PONG\n");
+        return true;
+    }
+
+    if (strcmp(header, "STATUS") == 0 || strcmp(header, "DIAG") == 0) {
+        write_status_prefix("OK");
+        return true;
+    }
+
+    if (strncmp(header, "GPIO ", 5) == 0) {
+        return handle_gpio_command(header);
+    }
+
+    return false;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Public entry points                                                        */
+/* ------------------------------------------------------------------------- */
+
+void protocol_usb_init(void)
+{
+    static bool initialized = false;
+    if (initialized) {
+        return;
+    }
+    initialized = true;
+
     usb_serial_jtag_driver_config_t usb_config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     usb_config.rx_buffer_size = 8192;
     usb_config.tx_buffer_size = 1024;
     (void)usb_serial_jtag_driver_install(&usb_config);
 
-    write_all("Q0READY 152 296 1BPP\n");
+    write_all(PROTOCOL_BANNER);
+}
+
+void protocol_task(frame_handler_t handler)
+{
+    protocol_usb_init();
 
     while (true) {
         char header[HEADER_MAX];
@@ -122,12 +208,11 @@ void protocol_task(frame_handler_t handler)
             continue;
         }
 
-        if (strcmp(header, "PING") == 0) {
-            write_all("PONG\n");
+        if (handle_text_command(header)) {
             continue;
         }
 
-        if (!parse_header(header, &expected_crc)) {
+        if (!parse_image_header(header, &expected_crc)) {
             write_all("ERR unsupported-header\n");
             continue;
         }
@@ -143,13 +228,6 @@ void protocol_task(frame_handler_t handler)
             continue;
         }
 
-        esp_err_t err = handler(s_frame, sizeof(s_frame));
-        if (err == ESP_OK) {
-            write_all("OK\n");
-        } else if (err == ESP_ERR_TIMEOUT) {
-            write_all("ERR epd-timeout\n");
-        } else {
-            write_all("ERR epd\n");
-        }
+        write_epd_result(handler(s_frame, sizeof(s_frame)));
     }
 }
