@@ -14,6 +14,7 @@ import type {
     FlashResult,
     PickImageResult,
     SerialPortInfo,
+    StockFirmwareInfo,
 } from './types';
 
 interface DesktopApi {
@@ -25,8 +26,9 @@ interface DesktopApi {
     pickStockImage(): Promise<string | null>;
 
     customFirmwareAvailable(): Promise<CustomFirmwareInfo>;
+    stockFirmwareAvailable(): Promise<StockFirmwareInfo>;
     flashCustom(portPath: string): Promise<FlashResult>;
-    flashStock(portPath: string, binPath: string): Promise<FlashResult>;
+    flashStock(portPath: string, binPath?: string): Promise<FlashResult>;
 
     onFirmwareLog(cb: (p: FirmwareLog) => void): () => void;
 }

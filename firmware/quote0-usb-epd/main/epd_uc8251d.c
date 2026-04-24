@@ -27,9 +27,12 @@
 
 #define EPD_SPI_HOST SPI2_HOST
 #define EPD_SPI_CLOCK_HZ (15 * 1000 * 1000)
-#define EPD_WAIT_INIT_MS 1800
-#define EPD_WAIT_PWR_MS 3500
-#define EPD_WAIT_REFRESH_MS 8000
+#define EPD_WAIT_INIT_MS 5000
+#define EPD_WAIT_PWR_MS 5000
+#define EPD_WAIT_REFRESH_START_MS 1000
+/* Healthy Quote/0 units finish a full refresh in ~1.8 s. Keep a generous but
+ * not painful ceiling while debugging long-busy failures. */
+#define EPD_WAIT_REFRESH_MS 12000
 
 /* ------------------------------------------------------------------------- */
 /* State                                                                      */
@@ -37,8 +40,9 @@
 
 static spi_device_handle_t s_epd;
 static bool s_bus_ready;
+static bool s_ctrl_inited;
 static SemaphoreHandle_t s_hw_mutex;
-static char s_last_diag[96] = "stage=boot mode=none busy=-1 err=0";
+static char s_last_diag[128] = "stage=boot mode=none busy=-1 err=0";
 
 /* ------------------------------------------------------------------------- */
 /* Utility                                                                    */
@@ -128,12 +132,13 @@ static void epd_write_data(const uint8_t *data, size_t len)
 
 static void epd_power_cycle(void)
 {
-    /* PWR is active-high on the live Quote/0 unit. */
     gpio_set_level(Q0_EPD_PIN_PWR, 0);
     gpio_set_level(Q0_EPD_PIN_RST, 0);
-    delay_ms(80);
+    delay_ms(500);
+    gpio_set_level(Q0_EPD_PIN_RST, 1);
+    delay_ms(20);
     gpio_set_level(Q0_EPD_PIN_PWR, 1);
-    delay_ms(120);
+    delay_ms(100);
 }
 
 static void epd_reset_short(void)
@@ -143,42 +148,72 @@ static void epd_reset_short(void)
     gpio_set_level(Q0_EPD_PIN_RST, 0);
     delay_ms(10);
     gpio_set_level(Q0_EPD_PIN_RST, 1);
-    delay_ms(20);
+    delay_ms(10);
 }
 
 /*
  * BUSY polarity on UC8251D is LOW-while-busy, HIGH-when-idle.  The panel BUSY
  * line is not externally pulled, so without an internal pull-up the input
- * reads whatever noise is nearby and epd_wait_idle_level() returns instantly —
- * producing a "refresh succeeded" result in well under the physical refresh
- * time.  epd_init_bus() configures GPIO_PULLUP_ENABLE; keep it that way.
+ * reads whatever noise is nearby and wait loops return immediately.
  */
-static bool epd_wait_idle_poll71(uint32_t timeout_ms)
+static bool epd_wait_idle_poll71(uint32_t timeout_ms, uint32_t *elapsed_ms)
 {
     uint32_t elapsed = 0;
     while (elapsed < timeout_ms) {
         epd_write_command(0x71);
         if (epd_pin_level(Q0_EPD_PIN_BUSY) != 0) {
-            delay_ms(40);
+            if (elapsed_ms != NULL) {
+                *elapsed_ms = elapsed;
+            }
+            delay_ms(50);
             return true;
         }
         delay_ms(10);
         elapsed += 10;
     }
+    if (elapsed_ms != NULL) {
+        *elapsed_ms = elapsed;
+    }
     return false;
 }
 
-static bool epd_wait_idle_level(uint32_t timeout_ms)
+static bool epd_wait_busy_level(int level, uint32_t timeout_ms,
+                                uint32_t step_ms, uint32_t *elapsed_ms)
+{
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_ms) {
+        if (epd_pin_level(Q0_EPD_PIN_BUSY) == level) {
+            if (elapsed_ms != NULL) {
+                *elapsed_ms = elapsed;
+            }
+            return true;
+        }
+        delay_ms(step_ms);
+        elapsed += step_ms;
+    }
+    if (elapsed_ms != NULL) {
+        *elapsed_ms = elapsed;
+    }
+    return epd_pin_level(Q0_EPD_PIN_BUSY) == level;
+}
+
+static bool epd_wait_idle_after_refresh(uint32_t timeout_ms, uint32_t *elapsed_ms)
 {
     uint32_t elapsed = 0;
     while (epd_pin_level(Q0_EPD_PIN_BUSY) == 0) {
         if (elapsed >= timeout_ms) {
+            if (elapsed_ms != NULL) {
+                *elapsed_ms = elapsed;
+            }
             return false;
         }
-        delay_ms(10);
-        elapsed += 10;
+        delay_ms(20);
+        elapsed += 20;
     }
-    delay_ms(40);
+    if (elapsed_ms != NULL) {
+        *elapsed_ms = elapsed;
+    }
+    delay_ms(200);
     return true;
 }
 
@@ -195,14 +230,16 @@ static void epd_prepare_static_buffers(void)
     if (prepared) {
         return;
     }
-    memset(s_white_frame, 0xff, sizeof(s_white_frame));
+    /* Waveshare's UC8251D examples commonly send 0x00 as OLD data before the
+     * new framebuffer. Keep the host-side payload inversion separate and use a
+     * neutral zero-filled previous frame here for A/B testing. */
+    memset(s_white_frame, 0x00, sizeof(s_white_frame));
     prepared = true;
 }
 
 /*
  * The tested Quote/0 panel requires framebuffer inversion: bits-to-dark in the
  * host's "1 = white" convention must be flipped before being sent over SPI.
- * See README.md (`On the tested Quote/0 unit ...`).
  */
 static const uint8_t *epd_invert_frame(const uint8_t *frame)
 {
@@ -212,27 +249,29 @@ static const uint8_t *epd_invert_frame(const uint8_t *frame)
     return s_inverted_frame;
 }
 
-static esp_err_t epd_refresh(const uint8_t *frame)
+static esp_err_t epd_controller_init(void)
 {
-    const uint8_t *payload = epd_invert_frame(frame);
+    uint32_t elapsed_ms = 0;
+
+    if (s_ctrl_inited) {
+        return ESP_OK;
+    }
 
     epd_set_diag("power-cycle", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
     epd_power_cycle();
     epd_reset_short();
 
     epd_set_diag("wait-before-init", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
-    if (!epd_wait_idle_poll71(EPD_WAIT_INIT_MS)) {
+    if (!epd_wait_idle_poll71(EPD_WAIT_INIT_MS, &elapsed_ms)) {
         epd_set_diag("timeout-before-init", "full",
                      epd_pin_level(Q0_EPD_PIN_BUSY), ESP_ERR_TIMEOUT);
         return ESP_ERR_TIMEOUT;
     }
 
-    /* PSR (panel setting) */
     epd_write_command(0x00);
     epd_write_data_byte(0xf3);
     epd_write_data_byte(0x0e);
 
-    /* Power setting */
     epd_write_command(0x01);
     epd_write_data_byte(0x03);
     epd_write_data_byte(0x00);
@@ -240,54 +279,54 @@ static esp_err_t epd_refresh(const uint8_t *frame)
     epd_write_data_byte(0x3f);
     epd_write_data_byte(0x03);
 
-    /* Booster soft start */
     epd_write_command(0x06);
     epd_write_data_byte(0x17);
     epd_write_data_byte(0x17);
     epd_write_data_byte(0x17);
 
-    /* Resolution setting */
     epd_write_command(0x61);
     epd_write_data_byte(0x98);
     epd_write_data_byte(0x01);
     epd_write_data_byte(0x28);
 
-    /* PLL control */
     epd_write_command(0x30);
     epd_write_data_byte(0x1b);
 
-    /* TCON */
     epd_write_command(0x60);
     epd_write_data_byte(0x22);
 
-    /* VCOM_DC */
     epd_write_command(0x82);
     epd_write_data_byte(0x00);
 
-    /* Power off sequence slot (unused but required to prime the register) */
     epd_write_command(0x03);
     epd_write_data_byte(0x10);
 
-    /* VCOM and data interval: 0x97 = white border, matches the stock firmware. */
     epd_write_command(0x50);
     epd_write_data_byte(0x97);
 
     epd_set_diag("power-on", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
     epd_write_command(0x04);
     delay_ms(100);
-    if (!epd_wait_idle_poll71(EPD_WAIT_PWR_MS)) {
+    if (!epd_wait_idle_poll71(EPD_WAIT_PWR_MS, &elapsed_ms)) {
         epd_set_diag("timeout-after-0x04", "full",
                      epd_pin_level(Q0_EPD_PIN_BUSY), ESP_ERR_TIMEOUT);
         return ESP_ERR_TIMEOUT;
     }
 
-    /* DTM1 holds the previous frame.  Sending an all-white frame guarantees a
-     * clean start regardless of what was on the panel before. */
+    epd_set_diag("init-done", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
+    s_ctrl_inited = true;
+    return ESP_OK;
+}
+
+static esp_err_t epd_refresh(const uint8_t *frame)
+{
+    const uint8_t *payload = epd_invert_frame(frame);
+    uint32_t elapsed_ms = 0;
+
     epd_set_diag("write-old", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
     epd_write_command(0x10);
     epd_write_data(s_white_frame, sizeof(s_white_frame));
 
-    /* DTM2 is the new frame. */
     epd_set_diag("write-new", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
     epd_write_command(0x13);
     epd_write_data(payload, Q0_EPD_FRAME_BYTES);
@@ -295,13 +334,29 @@ static esp_err_t epd_refresh(const uint8_t *frame)
     epd_set_diag("refresh", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
     epd_write_command(0x12);
     delay_ms(100);
-    if (!epd_wait_idle_level(EPD_WAIT_REFRESH_MS)) {
-        epd_set_diag("timeout-refresh", "full",
-                     epd_pin_level(Q0_EPD_PIN_BUSY), ESP_ERR_TIMEOUT);
+
+    if (!epd_wait_busy_level(0, EPD_WAIT_REFRESH_START_MS, 10, &elapsed_ms)) {
+        s_ctrl_inited = false;
+        snprintf(s_last_diag, sizeof(s_last_diag),
+                 "stage=timeout-refresh-start mode=full busy=%d err=%d ms=%lu",
+                 epd_pin_level(Q0_EPD_PIN_BUSY), (int)ESP_ERR_TIMEOUT,
+                 (unsigned long)elapsed_ms);
         return ESP_ERR_TIMEOUT;
     }
 
-    epd_set_diag("done", "full", epd_pin_level(Q0_EPD_PIN_BUSY), ESP_OK);
+    if (!epd_wait_idle_after_refresh(EPD_WAIT_REFRESH_MS, &elapsed_ms)) {
+        s_ctrl_inited = false;
+        snprintf(s_last_diag, sizeof(s_last_diag),
+                 "stage=timeout-refresh-release mode=full busy=%d err=%d ms=%lu",
+                 epd_pin_level(Q0_EPD_PIN_BUSY), (int)ESP_ERR_TIMEOUT,
+                 (unsigned long)elapsed_ms);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    snprintf(s_last_diag, sizeof(s_last_diag),
+             "stage=done mode=full busy=%d err=%d ms=%lu",
+             epd_pin_level(Q0_EPD_PIN_BUSY), (int)ESP_OK,
+             (unsigned long)elapsed_ms);
     return ESP_OK;
 }
 
@@ -386,7 +441,20 @@ esp_err_t epd_display_frame(const uint8_t *frame, size_t len)
 
     ESP_RETURN_ON_ERROR(epd_init_bus(), "epd", "epd_init_bus");
     (void)xSemaphoreTake(s_hw_mutex, portMAX_DELAY);
-    esp_err_t err = epd_refresh(frame);
+
+    const bool cold_start = !s_ctrl_inited;
+    esp_err_t err = epd_controller_init();
+    if (err == ESP_OK) {
+        err = epd_refresh(frame);
+        if (err == ESP_OK && cold_start) {
+            /* On this panel the first post-init refresh can blank the screen
+             * while priming the controller state. Fold the second known-good
+             * pass into the same user-visible send. */
+            delay_ms(120);
+            err = epd_refresh(frame);
+        }
+    }
+
     (void)xSemaphoreGive(s_hw_mutex);
     return err;
 }
@@ -417,6 +485,9 @@ esp_err_t epd_set_output_pin(const char *pin_name, int level)
     ESP_RETURN_ON_ERROR(epd_init_bus(), "epd", "epd_init_bus");
     (void)xSemaphoreTake(s_hw_mutex, portMAX_DELAY);
     gpio_set_level((gpio_num_t)pin, level);
+    if (pin == Q0_EPD_PIN_PWR || pin == Q0_EPD_PIN_RST) {
+        s_ctrl_inited = false;
+    }
 
     char mode[24];
     snprintf(mode, sizeof(mode), "%s=%d", pin_name, level);
@@ -435,5 +506,6 @@ void epd_power_off(void)
     epd_write_data_byte(0x01);
     delay_ms(100);
     gpio_set_level(Q0_EPD_PIN_PWR, 0);
+    s_ctrl_inited = false;
     (void)xSemaphoreGive(s_hw_mutex);
 }

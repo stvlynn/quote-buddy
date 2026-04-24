@@ -5,6 +5,7 @@ import {
     Minus,
     Plus,
     Square,
+    Terminal,
     Type,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -22,6 +23,7 @@ const ITEMS: Array<{ kind: ElementKind; Icon: typeof Type; label: string }> = [
     { kind: 'rect',  Icon: Square,    label: 'Rectangle' },
     { kind: 'line',  Icon: Minus,     label: 'Line' },
     { kind: 'image', Icon: ImageIcon, label: 'Image' },
+    { kind: 'tui',   Icon: Terminal,  label: 'TUI scene' },
 ];
 
 export function AddElementMenu({ onAdd, hasSourceImage }: AddElementMenuProps) {

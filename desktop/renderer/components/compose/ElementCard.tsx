@@ -8,6 +8,7 @@ import {
     Image as ImageIcon,
     Minus,
     Square,
+    Terminal,
     Trash2,
     Type,
     type LucideIcon,
@@ -23,6 +24,7 @@ const KIND_ICON: Record<ElementKind, LucideIcon> = {
     rect:  Square,
     line:  Minus,
     image: ImageIcon,
+    tui:   Terminal,
 };
 
 const KIND_TINT: Record<ElementKind, string> = {
@@ -30,6 +32,7 @@ const KIND_TINT: Record<ElementKind, string> = {
     rect:  'text-[#b39ddb]',
     line:  'text-[#80cbc4]',
     image: 'text-warn',
+    tui:   'text-ok',
 };
 
 export interface ElementCardProps {

@@ -11,6 +11,7 @@ import {
     RectEditor,
     TextEditor,
 } from '../compose/editors';
+import { TuiEditor } from '../compose/TuiEditor';
 import { Button } from '../ui/Button';
 import { Checkbox, Textarea } from '../ui/fields';
 import { IconButton } from '../ui/IconButton';
@@ -29,6 +30,7 @@ import type {
     LineElement,
     RectElement,
     TextElement,
+    TuiElement,
 } from '@/lib/types';
 
 export interface ComposeTabProps {
@@ -174,6 +176,12 @@ export function ComposeTab({ doc, setDoc, sourceImage, sourceImageName, onLog }:
                                     el={el as ImageElement}
                                     onChange={(p) => patchElement<ImageElement>(el.id, p)}
                                     sourceName={sourceImageName}
+                                />
+                            )}
+                            {el.kind === 'tui' && (
+                                <TuiEditor
+                                    el={el as TuiElement}
+                                    onChange={(p) => patchElement<TuiElement>(el.id, p)}
                                 />
                             )}
                         </ElementCard>

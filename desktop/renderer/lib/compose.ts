@@ -11,10 +11,21 @@ import type {
     LineElement,
     RectElement,
     TextElement,
+    TuiElement,
+    TuiPreset,
 } from './types';
+import { calendarPreset, dashboardPreset, statusPreset, type TuiScene } from './tui/scene';
 
 let idSeq = 1;
 export function newId(): string { return `e${idSeq++}`; }
+
+/** Instantiate a preset TUI scene + good-fit cell dimensions. */
+export function tuiPresetScene(preset: TuiPreset): { scene: TuiScene; cellW: number; cellH: number } {
+    if (preset === 'calendar') return { scene: calendarPreset(), cellW: 7, cellH: 10 };
+    if (preset === 'status')   return { scene: statusPreset(),   cellW: 7, cellH: 10 };
+    // 'dashboard' and 'custom' (custom starts from dashboard)
+    return { scene: dashboardPreset(), cellW: 6, cellH: 10 };
+}
 
 export function defaultElement(kind: ElementKind): ComposeElement {
     switch (kind) {
@@ -41,6 +52,19 @@ export function defaultElement(kind: ElementKind): ComposeElement {
             fit: 'contain', threshold: 160, dither: false,
             useSource: true,
         } satisfies ImageElement;
+        case 'tui': {
+            const preset: TuiPreset = 'dashboard';
+            const { scene, cellW, cellH } = tuiPresetScene(preset);
+            return {
+                id: newId(), kind: 'tui',
+                x: 0, y: 0,
+                w: scene.cols * cellW,
+                h: scene.rows * cellH,
+                cellW, cellH,
+                preset,
+                scene,
+            } satisfies TuiElement;
+        }
     }
 }
 
@@ -114,13 +138,23 @@ function elementToSpec(
         };
     }
     // image
-    const out: Record<string, unknown> = {
-        type: 'image',
+    if (el.kind === 'image') {
+        const out: Record<string, unknown> = {
+            type: 'image',
+            x: el.x, y: el.y, w: el.w, h: el.h,
+            fit: el.fit, threshold: el.threshold, dither: el.dither,
+        };
+        if (el.useSource && sourceImage) out.imageEl = sourceImage;
+        return out;
+    }
+    // tui
+    return {
+        type: 'tui',
         x: el.x, y: el.y, w: el.w, h: el.h,
-        fit: el.fit, threshold: el.threshold, dither: el.dither,
+        cellW: el.cellW, cellH: el.cellH,
+        preset: el.preset,
+        scene: el.scene,
     };
-    if (el.useSource && sourceImage) out.imageEl = sourceImage;
-    return out;
 }
 
 /** Parse an external JSON string into an editor model (with fresh ids). */
@@ -191,6 +225,22 @@ function specToElement(raw: Record<string, unknown>): ComposeElement | null {
             useSource: true,
         };
     }
+    if (type === 'tui') {
+        const preset: TuiPreset = (['dashboard', 'calendar', 'status', 'custom']
+            .includes(String(raw.preset)) ? String(raw.preset) : 'custom') as TuiPreset;
+        const fallback = tuiPresetScene(preset);
+        const scene = (raw.scene && typeof raw.scene === 'object') ? raw.scene as TuiScene : fallback.scene;
+        return {
+            id: newId(), kind: 'tui',
+            x: num(raw.x), y: num(raw.y),
+            w: num(raw.w ?? raw.width, scene.cols * fallback.cellW),
+            h: num(raw.h ?? raw.height, scene.rows * fallback.cellH),
+            cellW: num(raw.cellW, fallback.cellW),
+            cellH: num(raw.cellH, fallback.cellH),
+            preset,
+            scene,
+        };
+    }
     return null;
 }
 
@@ -222,5 +272,10 @@ export function summariseElement(el: ComposeElement): string {
     }
     if (el.kind === 'rect') return `${el.w}×${el.h} @ ${el.x},${el.y}`;
     if (el.kind === 'line') return `${el.x1},${el.y1} → ${el.x2},${el.y2}`;
+    if (el.kind === 'tui') {
+        const scene = el.scene as TuiScene | undefined;
+        const grid = scene ? `${scene.cols}×${scene.rows} cells` : 'empty';
+        return `${el.preset} · ${grid} · ${el.cellW}×${el.cellH}px`;
+    }
     return `${el.w}×${el.h} @ ${el.x},${el.y} · ${el.fit}`;
 }

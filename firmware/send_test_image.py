@@ -17,7 +17,7 @@ Examples
 
 The firmware reply format after a refresh is:
 
-    OK stage=done mode=full busy=1 err=0 bus=1 pins=busy:1,pwr:1,rst:1,dc:0,cs:1
+    OK stage=done mode=full busy=1 err=0 ms=1830 bus=1 pins=busy:1,pwr:1,rst:1,dc:0,cs:1
 """
 
 from __future__ import annotations

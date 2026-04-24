@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
     pickStockImage: () => ipcRenderer.invoke('dialog:pickStockImage'),
 
     customFirmwareAvailable: () => ipcRenderer.invoke('firmware:customAvailable'),
+    stockFirmwareAvailable: () => ipcRenderer.invoke('firmware:stockAvailable'),
     flashCustom: (portPath) => ipcRenderer.invoke('firmware:flashCustom', portPath),
     flashStock: (portPath, binPath) =>
         ipcRenderer.invoke('firmware:flashStock', portPath, binPath),

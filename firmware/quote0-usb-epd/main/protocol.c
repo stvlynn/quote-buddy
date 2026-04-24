@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 
 #include "epd_uc8251d.h"
+#include "i2c_scan.h"
 #include "quote0_pins.h"
 
 #define RX_TIMEOUT_TICKS pdMS_TO_TICKS(100)
@@ -170,6 +171,44 @@ static bool handle_text_command(const char *header)
 
     if (strncmp(header, "GPIO ", 5) == 0) {
         return handle_gpio_command(header);
+    }
+
+    {
+        int sda = -1, scl = -1;
+        if (sscanf(header, "I2CSCAN %d %d", &sda, &scl) == 2) {
+            /* Refuse pins that are already claimed. */
+            static const int forbidden[] = {
+                Q0_EPD_PIN_SCLK, Q0_EPD_PIN_MOSI, Q0_EPD_PIN_CS,
+                Q0_EPD_PIN_BUSY, Q0_EPD_PIN_RST, Q0_EPD_PIN_DC,
+                Q0_EPD_PIN_PWR,
+                /* USB D-/D+ on ESP32-C3. */
+                18, 19,
+                /* SPI flash. */
+                11, 12, 13, 14, 15, 16, 17,
+            };
+            bool blocked = false;
+            for (size_t i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); ++i) {
+                if (sda == forbidden[i] || scl == forbidden[i]) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) {
+                write_all("ERR i2c-forbidden-pin\n");
+                return true;
+            }
+
+            char result[192];
+            char reply[256];
+            esp_err_t err = i2c_scan_run(sda, scl, result, sizeof(result));
+            if (err == ESP_OK) {
+                snprintf(reply, sizeof(reply), "OK %s\n", result);
+            } else {
+                snprintf(reply, sizeof(reply), "ERR i2c %s\n", result);
+            }
+            write_all(reply);
+            return true;
+        }
     }
 
     return false;

@@ -83,9 +83,9 @@ export function Toolbar(p: ToolbarProps) {
                     variant="danger"
                     disabled={!hasPort || p.flashing}
                     onClick={p.onFlashStock}
-                    title="Flash a stock merged .bin (overwrites entire flash)"
+                    title="Restore the bundled stock firmware (falls back to manual .bin selection if needed)"
                 >
-                    Flash stock…
+                    Restore stock
                 </Button>
                 <Button
                     variant="danger"

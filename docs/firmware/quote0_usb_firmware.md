@@ -33,8 +33,13 @@ Q0IMG1 152 296 1BPP 5624 <crc32>  -> OK|ERR <diag string>
 The `<diag string>` has the stable shape:
 
 ```
-stage=<last-stage> mode=<last-mode> busy=<level> err=<errno> bus=<0|1> pins=busy:N,pwr:N,rst:N,dc:N,cs:N
+stage=<last-stage> mode=<last-mode> busy=<level> err=<errno> [ms=<wait-ms>] bus=<0|1> pins=busy:N,pwr:N,rst:N,dc:N,cs:N
 ```
+
+`ms=` is currently added for the final refresh wait path (`stage=done`,
+`timeout-refresh-start`, `timeout-refresh-release`) so host-side debugging can
+see whether the controller never entered BUSY or entered BUSY but never
+released it.
 
 `ERR` prefixes:
 
@@ -80,7 +85,7 @@ On the tested unit, running the current custom firmware (`rev=diag3`):
   last EPD result, and the live electrical level of every control pin, e.g.:
 
   ```
-  OK stage=done mode=full busy=1 err=0 bus=1 pins=busy:1,pwr:1,rst:1,dc:0,cs:1
+  OK stage=done mode=full busy=1 err=0 ms=1830 bus=1 pins=busy:1,pwr:1,rst:1,dc:0,cs:1
   ```
 
 - `GPIO SNAP` re-reads the five EPD pins without driving them.
@@ -95,6 +100,9 @@ On the tested unit, running the current custom firmware (`rev=diag3`):
   matters.
 - Full refresh works through the custom UC8251D path with a white-border
   register of `0x97` (same as stock).
+- `DTM1` (OLD data) must currently be sent as all-`0x00`. Using all-`0xFF`
+  keeps the panel in a black/white oscillation and `BUSY` never releases,
+  leading to `stage=timeout-refresh-release` after the physical flicker starts.
 
 ## Claude Desktop Buddy Role
 

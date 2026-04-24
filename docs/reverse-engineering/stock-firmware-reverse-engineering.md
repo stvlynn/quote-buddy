@@ -91,6 +91,179 @@ The logs show a workflow in which the device:
 
 That architecture matters. It shows that the original product already worked as a **remote-rendered endpoint**, not as a self-contained local UI.
 
+## Wireless implementation model
+
+The current evidence points to a single-chip wireless design, not a board with separate Wi-Fi and Bluetooth modules. The stock image identifies itself as an `ESP32-C3` build, and the same image contains both Wi-Fi runtime strings and a BLE provisioning stack.
+
+The BLE side looks especially close to Espressif's standard provisioning stack:
+
+- `protocomm`
+- `protocomm_nimble`
+- `NimBLE`
+- `WiFiProvConfig`
+- `WiFiConfigPayload`
+- `WiFiScanPayload`
+- `prov-ctrl`
+- `prov-config`
+- `prov-scan`
+- `prov-session`
+- `proto-ver`
+- `sec0`, `sec1`, `sec2`
+- `{"prov":{"ver":"v1.1","cap":["wifi_scan"]}}`
+- NimBLE advertising and scan-response error strings
+- BLE device-name setup error strings
+
+That combination strongly suggests this model:
+
+- BLE is used to provision Wi-Fi credentials
+- Wi-Fi is the main online transport after provisioning
+- MQTT carries the product's normal content and control traffic
+
+This is the strongest explanation that fits both the recovered strings and the reconstructed control flow.
+
+## Provisional application message schema
+
+We still do not have the exact MQTT topic map or the full JSON schema. We do, however, have enough strings to infer the rough message envelope.
+
+Visible envelope and routing strings include:
+
+- `requestKey`
+- `requestId`
+- `requestData`
+- `{"requestId":"%s","responseData":%s}`
+- `{"responseKey":"%s","responseId":"%s"}`
+- `/{"responseKey":"%s","responseData":%s}/`
+- `heartbeat/%s (%d bytes)`
+- `window/%s`
+- `{"scheme":"%s","version":"v2","id":"%s","series":"%s","model":"%s","edition":%s}`
+
+The most conservative reading is that the cloud path uses a small request/response envelope with key, id, and data fields, plus topic or route names for heartbeat and window traffic.
+
+### `SET_WINDOW`
+
+The payload appears to include at least these fields or nodes:
+
+- `render`
+- `border`
+- `array`
+
+Supporting strings include:
+
+- `SET_WINDOW: border=%d, data_len=%d`
+- `[MQTT] SET_WINDOW 已处理: border=%d, len=%d`
+- `(len=%d, total=%d, offset=%d)`
+
+That last string is important. It suggests that the actual render payload may be chunked or assembled from segments rather than delivered as one small inline value.
+
+### `SET_CONFIG`
+
+The payload appears richer than the earlier notes suggested. Visible field names include:
+
+- `needUpdate`
+- `forceUpdate`
+- `nextPowerRenderDelay`
+- `nextBattRenderDelay`
+- `channel`
+- `network`
+- `wifiList`
+- `locale`
+- `displayHint`
+- `floatTimezone`
+- `timezone`
+- `available`
+- `reset`
+- `update`
+- `has_task`
+
+Supporting log strings include:
+
+- `SET_CONFIG Task: powerRender=%ldms, battRender=%ldms`
+- `SET_CONFIG: locale=%s`
+- `SET_CONFIG: displayHint=%d`
+- `SET_CONFIG: floatTimezone=%.2f -> %ld min`
+- `SET_CONFIG: available=%d, reset=%d, update=%d`
+- `>>> SET_CONFIG: available=%d, reset=%d, update=%d, has_task=%d`
+- `>>> SET_CONFIG.Reset=1`
+
+The safest current interpretation is that `SET_CONFIG` combines:
+
+- display and UX toggles
+- locale and timezone settings
+- refresh intervals for charging and battery modes
+- device-availability flags
+- remote reset and update requests
+- an optional task block
+
+### Heartbeat and status data
+
+The stock image also contains a status-oriented field cluster:
+
+- `currentStatus`
+- `memory`
+- `temperature`
+- `wifiSignal`
+- `voltage`
+- `level`
+- `isLoaded`
+- `isCharging`
+- `power`
+- `schedule`
+- `hardware`
+- `production`
+- `server_mode`
+- `serverMode`
+- `software`
+- `general`
+- `statusData`
+
+Those names fit the existing hypothesis that heartbeats carry more than a simple online marker. They likely include live device state and hardware telemetry.
+
+## `COMMON.BLE_IMAGE_ON/OFF` and `COMMON.LOCAL_IMAGE_ON/OFF`
+
+These commands remain only partially explained, but the picture is now sharper.
+
+Direct evidence from the stock image includes:
+
+- `COMMON.BLE_IMAGE_ON`
+- `COMMON.BLE_IMAGE_OFF`
+- `COMMON.LOCAL_IMAGE_ON`
+- `COMMON.LOCAL_IMAGE_OFF`
+- `ble_img_mode`
+- `net_mode`
+- `BLE IMAGE OFF`
+- `WEB IMAGE OFF`
+
+The recovered command handler treats these as mode toggles, which is consistent with the string evidence. What we can say with confidence is this:
+
+- the firmware had a distinct BLE image mode flag
+- the firmware had at least one other image or network mode flag
+- the BLE-image and local-image commands did not look like one-shot upload commands
+
+What we still cannot prove is the exact transport behind those modes. The nearby `WEB IMAGE OFF` string is especially interesting, because it suggests that `LOCAL_IMAGE_*` may not have meant "raw local framebuffer over UART" in the way we first hoped. It may have referred to a separate image-source mode that the application internally contrasted with normal network windows.
+
+So the best current hypothesis is narrow:
+
+- `COMMON.BLE_IMAGE_ON/OFF` toggled a BLE-backed image path or BLE-originated image mode
+- `COMMON.LOCAL_IMAGE_ON/OFF` toggled a second non-standard image path, possibly what the firmware internally called a web-image mode
+- neither command, by itself, proves a practical raw USB image upload path in the stock firmware
+
+## Live-device probing note
+
+A live USB probe on the currently connected unit is useful mainly as a guardrail.
+
+The present device on `/dev/cu.usbmodem101` responds to the custom replacement firmware protocol:
+
+- `PING` replies with `PONG`
+- `STATUS` replies with the custom diagnostic line format
+
+That means the currently attached device is **not** running the stock application image right now. Any behavior observed through that live port belongs to the custom USB receiver in this repository, not to the stock `2.0.8` application.
+
+This matters for the unresolved questions above:
+
+- we can use the live unit to confirm the custom USB transport
+- we cannot use the current live unit, as-is, to validate stock `COMMON.*` command behavior
+- validating stock `COMMON.BLE_IMAGE_ON/OFF` or the exact stock MQTT payload schema would require reflashing the stock image or extracting runtime logs from a stock-running unit
+
 ## Factory and field-update model
 
 The image also exposes a factory-update path tied to Wi-Fi scanning and OTA:

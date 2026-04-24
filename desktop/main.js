@@ -6,7 +6,7 @@
 //   3. Drive esptool.py to flash firmware (stock merged image or custom app).
 //   4. Provide file-open dialogs for images / firmware / custom layouts.
 
-const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, desktopCapturer, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -32,6 +32,7 @@ const DEV_CUSTOM_BUILD_DIR = REPO_ROOT
     ? path.join(REPO_ROOT, 'firmware/quote0-usb-epd/build')
     : null;
 const DEV_STOCK_HINT = REPO_ROOT ? path.join(REPO_ROOT, '.workspace') : null;
+const BUNDLED_STOCK_FILENAME = 'quote0-stock-2.0.8-merged.bin';
 
 // Packaged-mode paths (resources/firmware-resources/ inside the app bundle).
 const PACKAGED_RES_DIR = process.resourcesPath
@@ -129,6 +130,39 @@ function resolveCustomFirmware() {
         return null;
     };
     return tryDir(DEV_CUSTOM_BUILD_DIR) || tryDir(PACKAGED_RES_DIR);
+}
+
+function resolveStockFirmware() {
+    const candidates = [];
+    if (DEV_STOCK_HINT) {
+        candidates.push({
+            path: path.join(DEV_STOCK_HINT, BUNDLED_STOCK_FILENAME),
+            source: 'workspace-bundled',
+        });
+        try {
+            const stockInWorkspace = fs.readdirSync(DEV_STOCK_HINT)
+                .filter((name) => /^2\.0\.8_merged_.*\.bin$/i.test(name))
+                .sort();
+            for (const name of stockInWorkspace) {
+                candidates.push({ path: path.join(DEV_STOCK_HINT, name), source: 'workspace-stock' });
+            }
+        } catch {
+            // Ignore missing .workspace in packaged mode / fresh clones.
+        }
+    }
+    if (PACKAGED_RES_DIR) {
+        candidates.push({
+            path: path.join(PACKAGED_RES_DIR, BUNDLED_STOCK_FILENAME),
+            source: 'packaged-bundled',
+        });
+    }
+
+    for (const candidate of candidates) {
+        if (candidate.path && fs.existsSync(candidate.path)) {
+            return candidate;
+        }
+    }
+    return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -340,16 +374,25 @@ async function flashCustom(port, onLog) {
 }
 
 async function flashStock(port, mergedBinPath, onLog) {
-    if (!fs.existsSync(mergedBinPath)) {
-        throw new Error(`stock image not found: ${mergedBinPath}`);
+    const resolved = mergedBinPath
+        ? { path: mergedBinPath, source: 'manual-file' }
+        : resolveStockFirmware();
+    if (!resolved || !fs.existsSync(resolved.path)) {
+        throw new Error(
+            'Bundled stock image not found. Expected one of:\n' +
+            `  ${DEV_STOCK_HINT ? path.join(DEV_STOCK_HINT, BUNDLED_STOCK_FILENAME) : '(dev stock n/a)'}\n` +
+            `  ${PACKAGED_RES_DIR ? path.join(PACKAGED_RES_DIR, BUNDLED_STOCK_FILENAME) : '(packaged stock n/a)'}\n` +
+            'You can still choose a merged stock .bin manually.'
+        );
     }
     const args = [
         '--chip', 'esp32c3',
         '--port', port,
         '--baud', '460800',
         'write_flash',
-        '0x0', mergedBinPath,
+        '0x0', resolved.path,
     ];
+    onLog('stdout', `[stock:${resolved.source}] ${resolved.path}\n`);
     await runEsptool(args, onLog);
 }
 
@@ -358,6 +401,32 @@ async function flashStock(port, mergedBinPath, onLog) {
 /* ------------------------------------------------------------------ */
 
 let mainWindow = null;
+
+function installDisplayMediaHandler() {
+    const ses = session.defaultSession;
+    if (!ses || typeof ses.setDisplayMediaRequestHandler !== 'function') return;
+
+    ses.setDisplayMediaRequestHandler(async (_request, callback) => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ['screen', 'window'],
+                thumbnailSize: { width: 0, height: 0 },
+                fetchWindowIcons: false,
+            });
+            const preferred = sources.find((source) => source.display_id) || sources[0];
+            if (!preferred) {
+                callback({});
+                return;
+            }
+            callback({ video: preferred, audio: null });
+        } catch (err) {
+            console.error('[display-media] failed to enumerate sources:', err);
+            callback({});
+        }
+    }, {
+        useSystemPicker: true,
+    });
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -469,8 +538,10 @@ ipcMain.handle('dialog:pickImage', async () => {
 });
 
 ipcMain.handle('dialog:pickStockImage', async () => {
-    const defaultPath =
-        DEV_STOCK_HINT && fs.existsSync(DEV_STOCK_HINT)
+    const bundled = resolveStockFirmware();
+    const defaultPath = bundled
+        ? path.dirname(bundled.path)
+        : DEV_STOCK_HINT && fs.existsSync(DEV_STOCK_HINT)
             ? DEV_STOCK_HINT
             : PACKAGED_RES_DIR && fs.existsSync(PACKAGED_RES_DIR)
                 ? PACKAGED_RES_DIR
@@ -490,6 +561,15 @@ ipcMain.handle('firmware:customAvailable', async () => {
     return {
         available: fw != null,
         buildDir: fw ? fw.dir : (DEV_CUSTOM_BUILD_DIR || PACKAGED_RES_DIR || 'n/a'),
+    };
+});
+
+ipcMain.handle('firmware:stockAvailable', async () => {
+    const stock = resolveStockFirmware();
+    return {
+        available: stock != null,
+        path: stock?.path || '',
+        source: stock?.source || 'missing',
     };
 });
 
@@ -534,6 +614,7 @@ protocol.registerSchemesAsPrivileged([
 
 app.whenReady().then(() => {
     registerAppProtocol();
+    installDisplayMediaHandler();
     createWindow();
 });
 

@@ -1,7 +1,7 @@
 # Quote/0 Desktop
 
 An Electron app that talks to a Quote/0 over its USB text protocol. It
-does four things:
+does five things:
 
 1. Flash firmware — either the stock `2.0.8_merged_*.bin` or the custom
    app produced by `firmware/quote0-usb-epd/build/`.
@@ -9,6 +9,8 @@ does four things:
 3. Configure **text** (title + body + footer, sizes, border) and push it.
 4. Configure a **compose** layout (visual editor: text / image / rect /
    line elements) and push it.
+5. Mirror a cropped **screen** region live to the panel, with adjustable
+   threshold / dither / fit and frame-rate limiting.
 
 The renderer is a **Next.js 15 + TypeScript + Tailwind** app statically
 exported at build time, then loaded inside Electron via a custom
@@ -81,8 +83,10 @@ The pill next to the port dropdown shows the live connection state:
 
 ### Flash firmware
 
-- **Flash stock…** opens a file picker (defaults to `.workspace/`) and
-  flashes a merged `.bin` at offset `0x0`.  This restores the original
+- **Restore stock** first looks for the bundled stock firmware image
+  (`quote0-stock-2.0.8-merged.bin`) in the app resources and flashes it at
+  offset `0x0`. If the bundled copy is missing, it falls back to a manual
+  file picker (defaulting to `.workspace/`). This restores the original
   Quote/0 behaviour for that unit.
 - **Flash custom** writes the three binaries from
   `firmware/quote0-usb-epd/build/` at `0x0 / 0x8000 / 0x10000`.  The NVS
@@ -126,6 +130,25 @@ or "stock firmware flashed" appears.
    collapsed **Show JSON** panel at the bottom lets advanced users
    import / export / copy the raw spec.
 8. *Send to Quote/0* (or `⌘↵`) uploads the composed frame.
+
+### Mirror a screen region live
+
+1. Switch to the **Screen** tab.
+2. Click **Share screen…** and choose a display or a window.
+3. Drag in the live preview to crop the area you want on the e-paper.
+4. Tune **Fit**, **Threshold**, optional **Floyd–Steinberg dither**, and
+   the mirror FPS limit.
+5. Click **Start live mirror** to keep pushing changed frames only.
+6. Click **Stop mirror** (or stop screen sharing from the OS picker) to
+   end the loop.
+
+Notes:
+
+- macOS will ask for Screen Recording permission the first time.
+- The crop is normalized to the shared surface, so you can refine the
+  selection without changing the Quote/0 layout mode.
+- The mirror loop skips uploads when the packed 1-bpp framebuffer hash is
+  unchanged, which avoids redundant refreshes on the panel.
 
 A compose spec is a JSON object — the visual editor produces exactly
 this shape, and the **Show JSON** panel can import or export it:
@@ -189,7 +212,7 @@ desktop/
 │   │   ├── Tabs.tsx
 │   │   ├── PreviewPanel.tsx
 │   │   ├── StatusPanel.tsx
-│   │   ├── tabs/{Image,Text,Compose}Tab.tsx
+│   │   ├── tabs/{Image,Text,Compose,Screen}Tab.tsx
 │   │   ├── compose/              element cards + editors
 │   │   └── ui/                   Button, IconButton, Segmented, StatePill, fields
 │   ├── hooks/{useDevice,useLog}.ts
@@ -208,6 +231,10 @@ no hard-coded inline SVGs.
 - **"custom firmware not built"** — run
   `firmware/flash_and_diag.sh --skip-flash` once to produce the three
   `build/*.bin` files.
+- **Screen sharing never starts / stays blank** — grant Screen Recording
+  permission to Quote/0 Desktop in the OS settings, then retry
+  **Share screen…**. Some Electron builds also require choosing an entire
+  display instead of a protected window.
 - **Send returns `ERR epd-timeout …`** — the panel never reported BUSY
   idle.  This is almost always a wiring / pin-map issue; see
   `docs/firmware/white-screen-debug-journey.md` and

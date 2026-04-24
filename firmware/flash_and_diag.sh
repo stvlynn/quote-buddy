@@ -11,7 +11,7 @@
 # Expected output on a working unit:
 #   - Q0READY banner
 #   - PONG
-#   - STATUS line with stage=done, busy=1, pins=busy:1,pwr:1,rst:1,dc:0,cs:1
+#   - STATUS line with stage=done, busy=1, ms≈1800, pins=busy:1,pwr:1,rst:1,dc:0,cs:1
 #   - a full-refresh cycle that finishes in ~1.8 s per frame
 
 set -euo pipefail

@@ -26,7 +26,7 @@ export function PreviewPanel({ canvasRef, size, hash, info }: PreviewPanelProps)
     return (
         <section
             aria-label="Device preview"
-            className="panel-shell flex flex-col p-3 gap-3"
+            className="panel-shell flex flex-col p-3 gap-3 overflow-hidden"
         >
             <div className="flex items-center justify-between text-xs text-fg-muted uppercase tracking-wider">
                 <span className="text-sm font-semibold normal-case tracking-normal text-fg">Preview</span>

@@ -9,7 +9,9 @@
 
 'use client';
 
-import type { ComposeSpec, Fit, Layout } from './types';
+import type { ComposeSpec, Fit, Layout, NormalizedRect } from './types';
+import { Buffer as TuiBuffer, rasteriseBufferToCanvas } from './tui';
+import { renderScene, type TuiScene } from './tui/scene';
 
 export const NATIVE_WIDTH = 152;
 export const NATIVE_HEIGHT = 296;
@@ -78,19 +80,37 @@ function applyThreshold(imageData: ImageData, threshold: number): void {
     }
 }
 
-function drawImageFit(
+function clampNormalizedRect(crop?: NormalizedRect | null): NormalizedRect | null {
+    if (!crop) return null;
+    const x = Math.max(0, Math.min(1, crop.x));
+    const y = Math.max(0, Math.min(1, crop.y));
+    const w = Math.max(0, Math.min(1 - x, crop.w));
+    const h = Math.max(0, Math.min(1 - y, crop.h));
+    if (w <= 0 || h <= 0) return null;
+    return { x, y, w, h };
+}
+
+function drawRasterSourceFit(
     ctx: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    source: CanvasImageSource,
+    sourceW: number,
+    sourceH: number,
     targetW: number,
     targetH: number,
     fit: Fit,
+    crop?: NormalizedRect | null,
 ): void {
-    const sw = img.naturalWidth;
-    const sh = img.naturalHeight;
-    if (sw === 0 || sh === 0) return;
+    if (sourceW <= 0 || sourceH <= 0) return;
+
+    const clipped = clampNormalizedRect(crop);
+    const sx = clipped ? clipped.x * sourceW : 0;
+    const sy = clipped ? clipped.y * sourceH : 0;
+    const sw = clipped ? clipped.w * sourceW : sourceW;
+    const sh = clipped ? clipped.h * sourceH : sourceH;
+    if (sw <= 0 || sh <= 0) return;
 
     if (fit === 'stretch') {
-        ctx.drawImage(img, 0, 0, targetW, targetH);
+        ctx.drawImage(source, sx, sy, sw, sh, 0, 0, targetW, targetH);
         return;
     }
     const scale = fit === 'cover'
@@ -100,7 +120,17 @@ function drawImageFit(
     const dh = sh * scale;
     const dx = (targetW - dw) / 2;
     const dy = (targetH - dh) / 2;
-    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+function drawImageFit(
+    ctx: CanvasRenderingContext2D,
+    img: HTMLImageElement,
+    targetW: number,
+    targetH: number,
+    fit: Fit,
+): void {
+    drawRasterSourceFit(ctx, img, img.naturalWidth, img.naturalHeight, targetW, targetH, fit);
 }
 
 export function loadImage(dataUrl: string): Promise<HTMLImageElement> {
@@ -130,6 +160,29 @@ export function renderImage(opts: RenderImageOpts): HTMLCanvasElement {
     const imgData = ctx.getImageData(0, 0, width, height);
     if (opts.dither) floydSteinberg(imgData);
     else applyThreshold(imgData, opts.threshold);
+    ctx.putImageData(imgData, 0, 0);
+    return canvas;
+}
+
+export interface RenderScreenCaptureOpts {
+    video: HTMLVideoElement;
+    layout: Layout;
+    fit: Fit;
+    threshold: number;
+    dither: boolean;
+    crop?: NormalizedRect | null;
+}
+
+export function renderScreenCapture(opts: RenderScreenCaptureOpts): HTMLCanvasElement {
+    const { video, layout, fit, threshold, dither, crop } = opts;
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+        throw new Error('screen stream is not ready yet');
+    }
+    const { canvas, ctx, width, height } = createCanvas(layout);
+    drawRasterSourceFit(ctx, video, video.videoWidth, video.videoHeight, width, height, fit, crop);
+    const imgData = ctx.getImageData(0, 0, width, height);
+    if (dither) floydSteinberg(imgData);
+    else applyThreshold(imgData, threshold);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
 }
@@ -257,6 +310,7 @@ export function renderCompose({ spec, layout }: RenderComposeOpts): HTMLCanvasEl
         else if (t === 'rect') drawComposeRect(ctx, el);
         else if (t === 'line') drawComposeLine(ctx, el);
         else if (t === 'image') drawComposeImage(ctx, el);
+        else if (t === 'tui') drawComposeTui(ctx, el);
     }
 
     return canvas;
@@ -402,6 +456,43 @@ function drawComposeImage(ctx: CanvasRenderingContext2D, el: Record<string, unkn
     if (el.dither) floydSteinberg(imgData);
     else applyThreshold(imgData, el.threshold != null ? (el.threshold as number) : 160);
     ctx.putImageData(imgData, box.x, box.y);
+}
+
+/**
+ * Rasterise a ratatui-style scene into the compose canvas.
+ *
+ * The scene's logical cell grid (`cols × rows`) is drawn at `cellW × cellH`
+ * pixels each, then clipped to the element's bounding box. Inverse cells
+ * paint a black block with white glyphs — exactly what the 1-bpp panel
+ * needs for "highlighted" content after thresholding.
+ */
+function drawComposeTui(ctx: CanvasRenderingContext2D, el: Record<string, unknown>): void {
+    const box = resolveBox(el, ctx.canvas.width, ctx.canvas.height);
+    const scene = el.scene as TuiScene | undefined;
+    if (!scene || !scene.root) return;
+
+    const cellW = Math.max(1, (el.cellW as number) || 6);
+    const cellH = Math.max(1, (el.cellH as number) || 8);
+    const cols = Math.max(1, (scene.cols as number) || Math.floor(box.w / cellW));
+    const rows = Math.max(1, (scene.rows as number) || Math.floor(box.h / cellH));
+
+    const buf = new TuiBuffer(cols, rows);
+    renderScene(scene.root, buf.area(), buf);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(box.x, box.y, box.w, box.h);
+    ctx.clip();
+    // Paper fill (white) — safe on both white and black document bgs
+    // because subsequent threshold collapses to 1-bit anyway.
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(box.x, box.y, cols * cellW, rows * cellH);
+    rasteriseBufferToCanvas(buf, ctx, {
+        x: box.x, y: box.y,
+        cellW, cellH,
+        ink: '#000', paper: '#fff',
+    });
+    ctx.restore();
 }
 
 /* ------------------------------------------------------------------ */
