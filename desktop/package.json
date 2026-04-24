@@ -12,9 +12,11 @@
     "start": "npm run build && electron .",
     "lint": "cd renderer && next lint",
     "typecheck": "tsc --noEmit -p renderer/tsconfig.json",
-    "package:mac-arm64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-arm64/Quote0.app",
-    "package:mac-x64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-x64/Quote0.app",
-    "package:linux": "npm run build && electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\""
+    "package:mac-arm64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-arm64/Quote0.app && npm run dmg:mac-arm64",
+    "package:mac-x64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-x64/Quote0.app && npm run dmg:mac-x64",
+    "package:linux": "npm run build && electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\"",
+    "dmg:mac-arm64": "rm -rf dist/_dmg_arm64 && mkdir -p dist/_dmg_arm64 && electron-installer-dmg dist/Quote0-darwin-arm64/Quote0.app Quote0 --out=dist/_dmg_arm64 --title=\"Quote/0 Desktop\" --overwrite && mv dist/_dmg_arm64/Quote0.dmg dist/Quote0-darwin-arm64.dmg && rmdir dist/_dmg_arm64",
+    "dmg:mac-x64": "rm -rf dist/_dmg_x64 && mkdir -p dist/_dmg_x64 && electron-installer-dmg dist/Quote0-darwin-x64/Quote0.app Quote0 --out=dist/_dmg_x64 --title=\"Quote/0 Desktop\" --overwrite && mv dist/_dmg_x64/Quote0.dmg dist/Quote0-darwin-x64.dmg && rmdir dist/_dmg_x64"
   },
   "author": "stvlynn",
   "license": "MIT",
@@ -37,6 +39,7 @@
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
     "electron": "^33.0.0",
+    "electron-installer-dmg": "^5.0.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",

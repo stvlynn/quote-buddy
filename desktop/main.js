@@ -38,24 +38,67 @@ const PACKAGED_RES_DIR = process.resourcesPath
     ? path.join(process.resourcesPath, 'firmware-resources')
     : null;
 
-/** Locate esptool.py + python. Packaged builds fall back to the user's PATH. */
+/**
+ * Locate esptool.  Packaged macOS GUI apps often launch with a minimal
+ * PATH (`/usr/bin:/bin:...`), so we explicitly probe the common places
+ * Homebrew / pip-user / pyenv put things.  Returns one of:
+ *   { python, esptoolPy, source }   — run `python <esptoolPy>`
+ *   { systemCmd, source }           — run the binary directly
+ *   { python, module: 'esptool' }   — run `python -m esptool`
+ *   null                            — nothing found
+ */
 function resolveEsptool() {
     // 1. Dev-mode bundled Python venv.
     if (DEV_ESPTOOL_PY && fs.existsSync(DEV_ESPTOOL_PY)) {
         return { python: DEV_PYTHON_BIN, esptoolPy: DEV_ESPTOOL_PY, source: 'bundled' };
     }
-    // 2. System esptool.py on PATH.
-    const sys = spawnSync('which', ['esptool.py']);
-    if (sys.status === 0) {
-        const p = sys.stdout.toString().trim();
-        if (p) return { python: null, esptoolPy: p, source: 'system-esptool.py' };
+
+    // 2. Extend PATH with common GUI-app-missing locations, then use it
+    //    for everything below.
+    const extraPaths = [
+        '/opt/homebrew/bin',
+        '/opt/homebrew/sbin',
+        '/usr/local/bin',
+        '/usr/local/sbin',
+        path.join(os.homedir(), '.local/bin'),
+        path.join(os.homedir(), 'Library/Python/3.12/bin'),
+        path.join(os.homedir(), 'Library/Python/3.11/bin'),
+        path.join(os.homedir(), 'Library/Python/3.10/bin'),
+        path.join(os.homedir(), 'Library/Python/3.9/bin'),
+    ].filter((p) => {
+        try { return fs.statSync(p).isDirectory(); } catch { return false; }
+    });
+    const mergedPath = [...extraPaths, process.env.PATH || '']
+        .filter(Boolean)
+        .join(':');
+    const spawnEnv = { ...process.env, PATH: mergedPath };
+
+    // Helper to try `which` in the merged PATH.
+    const tryWhich = (name) => {
+        const r = spawnSync('/usr/bin/which', [name], { env: spawnEnv });
+        if (r.status !== 0) return null;
+        const p = r.stdout.toString().trim();
+        return p || null;
+    };
+
+    // 3. System esptool.py on PATH.
+    const espPy = tryWhich('esptool.py');
+    if (espPy) return { python: null, esptoolPy: espPy, source: `system-esptool.py (${espPy})` };
+
+    // 4. System esptool (new-style entrypoint).
+    const espNew = tryWhich('esptool');
+    if (espNew) return { systemCmd: espNew, source: `system-esptool (${espNew})` };
+
+    // 5. Any python3 with an installed `esptool` module (pip install esptool).
+    for (const py of ['python3', 'python']) {
+        const which = tryWhich(py);
+        if (!which) continue;
+        const probe = spawnSync(which, ['-c', 'import esptool; print(esptool.__file__)'], { env: spawnEnv });
+        if (probe.status === 0) {
+            return { python: which, module: 'esptool', source: `${py} -m esptool (${which})` };
+        }
     }
-    // 3. System esptool (new style command).
-    const sysNew = spawnSync('which', ['esptool']);
-    if (sysNew.status === 0) {
-        const p = sysNew.stdout.toString().trim();
-        if (p) return { python: null, esptoolPy: null, systemCmd: p, source: 'system-esptool' };
-    }
+
     return null;
 }
 
@@ -134,7 +177,25 @@ async function sendFrame(portPath, frameBytes) {
 /**
  * Shared serial scaffold.  Opens the port, drains existing banner output,
  * then lets the caller `write()` and await a single '\n'-terminated response.
+ *
+ * The Quote/0 firmware uses the same UART for both the Q0 text protocol
+ * (request/response) and its ESP-IDF debug logs (e.g. "I (9589) UART_CMD:
+ * [RX] 5 bytes ...").  We filter the log lines out here so the renderer
+ * only ever sees real protocol replies: lines beginning with `PONG`,
+ * `OK`, `ERR`, or `Q0READY` (the banner, which we also drop because the
+ * caller is usually waiting for a command-specific reply).
  */
+const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
+function isProtocolReply(line) {
+    const s = line.replace(ANSI_RE, '').trim();
+    if (!s) return false;
+    // Protocol replies are exactly these four shapes.
+    return /^(PONG\b|OK(\s|$)|ERR(\s|$))/.test(s);
+}
+function cleanLine(line) {
+    return line.replace(ANSI_RE, '').replace(/\r$/, '').trim();
+}
+
 function openAndExchange(portPath, exchange) {
     return new Promise((resolve, reject) => {
         const port = new SerialPort({
@@ -150,10 +211,13 @@ function openAndExchange(portPath, exchange) {
             rxBuffer += chunk.toString('ascii');
             let nl;
             while ((nl = rxBuffer.indexOf('\n')) >= 0) {
-                const line = rxBuffer.slice(0, nl).replace(/\r$/, '');
+                const raw = rxBuffer.slice(0, nl).replace(/\r$/, '');
                 rxBuffer = rxBuffer.slice(nl + 1);
+                // Drop firmware log lines / banners — only surface genuine
+                // protocol replies to the waiter.
+                if (!isProtocolReply(raw)) continue;
                 const waiter = lineWaiters.shift();
-                if (waiter) waiter.resolve(line);
+                if (waiter) waiter.resolve(cleanLine(raw));
             }
         });
 
@@ -176,7 +240,7 @@ function openAndExchange(portPath, exchange) {
         port.open(async (err) => {
             if (err) return reject(err);
             try {
-                // Swallow greeting ('Q0READY ...') that may arrive right after open.
+                // Swallow any banner/greeting that may arrive right after open.
                 await new Promise((r) => setTimeout(r, 150));
                 const result = await exchange(port, waitLine);
                 port.close(() => resolve(result));
@@ -196,30 +260,44 @@ function runEsptool(args, onStdout) {
         const resolved = resolveEsptool();
         if (!resolved) {
             return reject(new Error(
-                'esptool not found. Install it with:\n' +
-                '  python3 -m pip install --user esptool\n' +
-                'or make sure `esptool.py` is on your PATH.'
+                'esptool not found. Install it with one of:\n' +
+                '  pip3 install --user esptool\n' +
+                '  brew install esptool\n' +
+                'Then restart Quote/0 Desktop.\n' +
+                'Looked on PATH and in /opt/homebrew/bin, /usr/local/bin, ~/.local/bin, ~/Library/Python/3.x/bin.'
             ));
         }
 
         let cmd, cmdArgs;
         if (resolved.systemCmd) {
-            // system `esptool` (no .py) — call it directly.
             cmd = resolved.systemCmd;
             cmdArgs = args;
+        } else if (resolved.module) {
+            // `python -m esptool ...`
+            cmd = resolved.python;
+            cmdArgs = ['-m', resolved.module, ...args];
         } else if (resolved.python) {
-            // bundled venv python + esptool.py script.
             cmd = resolved.python;
             cmdArgs = [resolved.esptoolPy, ...args];
         } else {
-            // esptool.py somewhere on PATH — run with system python3.
-            cmd = 'python3';
-            cmdArgs = [resolved.esptoolPy, ...args];
+            // esptool.py found in PATH but without a python — shell it directly.
+            cmd = resolved.esptoolPy;
+            cmdArgs = args;
         }
 
-        onStdout('stdout', `$ ${cmd} ${cmdArgs.join(' ')}\n`);
+        // Propagate the augmented PATH so that children can find any helper
+        // binaries they need (e.g. python imports).
+        const extraPaths = [
+            '/opt/homebrew/bin', '/opt/homebrew/sbin',
+            '/usr/local/bin', '/usr/local/sbin',
+            path.join(os.homedir(), '.local/bin'),
+        ];
+        const mergedPath = [...extraPaths, process.env.PATH || ''].filter(Boolean).join(':');
+
+        onStdout('stdout', `[${resolved.source}]\n$ ${cmd} ${cmdArgs.join(' ')}\n`);
         const child = spawn(cmd, cmdArgs, {
             cwd: REPO_ROOT || process.cwd(),
+            env: { ...process.env, PATH: mergedPath },
         });
         child.stdout.on('data', (data) => onStdout('stdout', data.toString()));
         child.stderr.on('data', (data) => onStdout('stderr', data.toString()));
