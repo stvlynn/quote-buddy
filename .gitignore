@@ -14,5 +14,9 @@ skills-lock.json
 desktop/node_modules/
 desktop/dist/
 desktop/out/
+desktop/renderer/.next/
+desktop/renderer/node_modules/
+desktop/renderer/next-env.d.ts
+desktop/renderer/tsconfig.tsbuildinfo
 
 .release/

@@ -1,26 +1,29 @@
 # Quote/0 Desktop
 
-An Electron app that talks to a Quote/0 over its USB text protocol.  It does
-four things:
+An Electron app that talks to a Quote/0 over its USB text protocol. It
+does four things:
 
 1. Flash firmware — either the stock `2.0.8_merged_*.bin` or the custom
    app produced by `firmware/quote0-usb-epd/build/`.
 2. Configure an **image** and push it to the panel.
 3. Configure **text** (title + body + footer, sizes, border) and push it.
-4. Configure a **compose** layout (JSON: text / image / rect / line) and
-   push it.
+4. Configure a **compose** layout (visual editor: text / image / rect /
+   line elements) and push it.
 
-All rendering happens in a browser Canvas in the renderer process; the
-final 1-bpp framebuffer is packed client-side and sent via the `Q0IMG1`
-protocol from the main process over a standard serial port.
+The renderer is a **Next.js 15 + TypeScript + Tailwind** app statically
+exported at build time, then loaded inside Electron via a custom
+`app://` protocol.  All framebuffer rendering happens in a browser
+Canvas in the renderer process; the final 1-bpp framebuffer is packed
+client-side and sent via the `Q0IMG1` protocol from the main process
+over a standard serial port.
 
 ## Prerequisites
 
 - macOS or Linux (Windows should work but is not tested)
 - Node.js 18+
 - The custom firmware already built at least once so
-  `firmware/quote0-usb-epd/build/` contains the three bin files.  This is
-  what `firmware/flash_and_diag.sh` produces automatically.
+  `firmware/quote0-usb-epd/build/` contains the three bin files.  This
+  is what `firmware/flash_and_diag.sh` produces automatically.
 - Flashing uses the repo-bundled `esptool.py` from
   `.deps/espressif-tools/python_env/idf5.5_py3.9_env/bin/`.  No separate
   Python install is required.
@@ -30,22 +33,51 @@ protocol from the main process over a standard serial port.
 ```sh
 cd desktop
 npm install
-npm start
+npm run dev        # Next.js dev server + Electron with live reload
 ```
 
-The first `npm install` downloads Electron (~200 MB) and the SerialPort
-native module.  Subsequent starts are instant.
+Or, for a production build:
+
+```sh
+npm start          # next build (static export) + electron
+```
+
+The first `npm install` pulls Electron (~200 MB), the SerialPort native
+module, Next.js, React, Tailwind, and Lucide icons.  Subsequent starts
+are fast.
+
+## Scripts
+
+| Script                    | What it does                                      |
+| ------------------------- | ------------------------------------------------- |
+| `npm run dev`             | Next dev server + Electron with hot reload        |
+| `npm run build`           | Static export to `desktop/out/`                   |
+| `npm start`               | `build` then launch Electron against the export   |
+| `npm run typecheck`       | `tsc --noEmit` over `renderer/`                   |
+| `npm run package:mac-arm64` | Build + electron-packager for macOS arm64       |
+| `npm run package:mac-x64`   | Build + electron-packager for macOS x64         |
+| `npm run package:linux`     | Build + electron-packager for Linux x64         |
+
+## Keyboard shortcuts
+
+- `⌘R` / `Ctrl+R` — rescan serial ports
+- `⌘↵` / `Ctrl+Enter` — send the current frame
+- Click the framebuffer hash chip below the preview to copy it
 
 ## Using it
 
 ### Pick the device
 
-The top toolbar has a port dropdown.  Press `↻` to re-scan.  The app only
-lists serial ports whose name or vendor ID looks like a Quote/0:
+The top toolbar has a port dropdown.  Press the refresh icon to re-scan.
+Only serial ports whose name or vendor ID looks like a Quote/0 are
+listed:
 
 - macOS: `/dev/cu.usbmodemNNN`
 - Linux: `/dev/ttyACM*` / `/dev/ttyUSB*`
 - VID `303a` (Espressif native USB)
+
+The pill next to the port dropdown shows the live connection state:
+`No device` / `Ready` / `Sending` / `Flashing` / `… failed`.
 
 ### Flash firmware
 
@@ -57,39 +89,51 @@ lists serial ports whose name or vendor ID looks like a Quote/0:
   partition is untouched, so panel ID and calibration survive.
 
 Both flash paths stream esptool's stdout/stderr into the activity log on
-the right.  Don't disconnect the device until "custom firmware flashed" or
-"stock firmware flashed" appears.
+the right.  Don't disconnect the device until "custom firmware flashed"
+or "stock firmware flashed" appears.
 
 ### Push an image
 
 1. Go to the **Image** tab.
 2. Click *Choose file…* and pick any PNG/JPEG/etc.
-3. Adjust **Fit** (contain / cover / stretch), **Threshold**, and optional
-   **Floyd-Steinberg dither**.
+3. Adjust **Fit** (contain / cover / stretch), **Threshold**, and
+   optional **Floyd-Steinberg dither**.
 4. The preview updates live.
-5. *Send to Quote/0.*
+5. *Send to Quote/0* (or press `⌘↵`).
 
 ### Configure text
 
 1. Switch to the **Text** tab.
 2. Type a title, a body (newlines preserved), and an optional footer.
 3. Tune title / body font size and whether to draw a border.
-4. *Send to Quote/0.*
+4. *Send to Quote/0*.
 
-### Compose (power-user mode)
+### Compose (visual layout editor)
 
 1. Switch to the **Compose** tab.
-2. *Load sample* for a starter layout, or paste your own JSON.
-3. *Validate* parses the spec and reports the error if any.
-4. Any valid edit redraws the preview automatically.
-5. *Send to Quote/0.*
+2. The elements list shows every draw operation as a collapsible card.
+   Press the **＋** button to add a `Text`, `Rectangle`, `Line`, or
+   `Image` element.
+3. Each card exposes the relevant fields (coordinates, size, font,
+   alignment, color, fit, threshold, …) — no JSON editing required.
+4. Use the icon actions on each card to move it up / down, duplicate
+   it, or delete it.
+5. The two top-level switches control the canvas background and outer
+   border.
+6. For images, first pick a source file in the **Image** tab — the
+   compose `Image` element reuses that source.
+7. **Load sample** populates the list with a working example.  The
+   collapsed **Show JSON** panel at the bottom lets advanced users
+   import / export / copy the raw spec.
+8. *Send to Quote/0* (or `⌘↵`) uploads the composed frame.
 
-A compose spec is a JSON object:
+A compose spec is a JSON object — the visual editor produces exactly
+this shape, and the **Show JSON** panel can import or export it:
 
 ```json
 {
-  "background": "white",          // "white" or "black"
-  "border": true,                 // true/false or { inset, width }
+  "background": "white",
+  "border": true,
   "elements": [
     { "type": "text",  "x": 12, "y": 12, "w": 200, "h": 28,
       "text": "Hello", "font_size": 22,
@@ -100,11 +144,11 @@ A compose spec is a JSON object:
 }
 ```
 
-Note: image elements in compose JSON are only rendered when they already
-have an `imageEl` set (from a data URL loaded earlier in the renderer).
-Arbitrary file-path images are not loaded from a compose spec because the
-renderer can't read the filesystem directly; pick them through the Image
-tab and send that instead.
+Image elements in compose JSON reuse the currently-loaded source image
+from the **Image** tab.  Arbitrary file-path images are not loaded from
+a compose spec because the renderer can't read the filesystem directly;
+pick them through the Image tab and the compose `Image` element will
+use them automatically.
 
 ### Layout rotations
 
@@ -113,37 +157,54 @@ panel's native 152 × 296 portrait orientation.
 
 - `native` — draw in 152 × 296 portrait, upload as-is.
 - `native-180` — 180° rotation.
-- `landscape-right` — draw in 296 × 152 landscape (default), rotated 90°
-  clockwise on the panel.  Matches `tools/quote0_send.py`'s default.
+- `landscape-right` — draw in 296 × 152 landscape (default), rotated
+  90° clockwise on the panel.  Matches `tools/quote0_send.py`'s
+  default.
 - `landscape-left` — opposite 90° rotation.
 
 ### Invert
 
-On the tested Quote/0 unit the framebuffer must be inverted before upload
-(see `docs/firmware/white-screen-debug-journey.md`).  The checkbox is on
-by default.  Turn it off for the rare panel that doesn't need inversion.
+On the tested Quote/0 unit the framebuffer must be inverted before
+upload (see `docs/firmware/white-screen-debug-journey.md`).  The
+checkbox is on by default.  Turn it off for the rare panel that doesn't
+need inversion.
 
-## Where the files live
+## Source layout
 
 ```
 desktop/
-├── package.json
-├── main.js                Main process: window, IPC, serial IO, esptool.
-├── preload.js             contextBridge → window.api.
-└── src/
-    ├── index.html
-    ├── styles.css
-    ├── canvas.js          Canvas rendering + 1-bit framebuffer packing.
-    └── renderer.js        UI state, tabs, device calls.
+├── main.js              Electron main process: window, IPC, serial IO, esptool.
+├── preload.js           contextBridge → window.api.
+├── package.json         npm scripts: dev / build / package:*
+├── renderer/            Next.js App Router project
+│   ├── next.config.mjs  output: 'export', distDir: '../out'
+│   ├── tailwind.config.mjs
+│   ├── tsconfig.json
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx              main window
+│   │   └── globals.css           Tailwind + design tokens
+│   ├── components/
+│   │   ├── Toolbar.tsx
+│   │   ├── Tabs.tsx
+│   │   ├── PreviewPanel.tsx
+│   │   ├── StatusPanel.tsx
+│   │   ├── tabs/{Image,Text,Compose}Tab.tsx
+│   │   ├── compose/              element cards + editors
+│   │   └── ui/                   Button, IconButton, Segmented, StatePill, fields
+│   ├── hooks/{useDevice,useLog}.ts
+│   └── lib/{types,api,canvas,compose}.ts
+└── out/                 Next.js static export (loaded by Electron via app://).
 ```
 
-No build step, no bundler.  All source is the source that runs.
+All icons come from [Lucide](https://lucide.dev) via `lucide-react` —
+no hard-coded inline SVGs.
 
 ## Troubleshooting
 
 - **"No Quote/0 detected"** — the vendor/path filter hides noise.  Pull
-  the device, re-insert, hit `↻`.  If it still doesn't appear, remove the
-  filter in `main.js` (`serial:list` handler) and re-scan.
+  the device, re-insert, hit refresh.  If it still doesn't appear,
+  remove the filter in `main.js` (`serial:list` handler) and re-scan.
 - **"custom firmware not built"** — run
   `firmware/flash_and_diag.sh --skip-flash` once to produce the three
   `build/*.bin` files.

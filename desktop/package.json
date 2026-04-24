@@ -1,15 +1,20 @@
 {
   "name": "quote0-desktop",
-  "version": "0.2.0",
-  "description": "Quote/0 desktop control app: flash firmware, push framebuffers, configure text/image/compose layouts.",
+  "version": "0.3.0",
+  "description": "Quote/0 desktop control app: flash firmware, push framebuffers, configure text/image/compose layouts. Next.js + TypeScript renderer packaged in Electron.",
   "private": true,
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --enable-logging",
-    "package:mac-arm64": "electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true",
-    "package:mac-x64": "electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true",
-    "package:linux": "electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true"
+    "dev": "concurrently -k -n next,electron -c blue,yellow \"npm run dev:renderer\" \"wait-on http://localhost:3000 && cross-env ELECTRON_RENDERER_URL=http://localhost:3000 electron .\"",
+    "dev:renderer": "cd renderer && next dev -p 3000",
+    "dev:electron": "cross-env ELECTRON_RENDERER_URL=http://localhost:3000 electron .",
+    "build": "cd renderer && next build",
+    "start": "npm run build && electron .",
+    "lint": "cd renderer && next lint",
+    "typecheck": "tsc --noEmit -p renderer/tsconfig.json",
+    "package:mac-arm64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\"",
+    "package:mac-x64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\"",
+    "package:linux": "npm run build && electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\""
   },
   "author": "stvlynn",
   "license": "MIT",
@@ -17,10 +22,24 @@
     "node": ">=18"
   },
   "dependencies": {
+    "lucide-react": "^0.460.0",
+    "next": "^15.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "serialport": "^12.0.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
-    "electron": "^33.0.0"
+    "@types/node": "^20.16.10",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3",
+    "wait-on": "^8.0.1"
   }
 }

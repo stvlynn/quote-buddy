@@ -6,11 +6,12 @@
 //   3. Drive esptool.py to flash firmware (stock merged image or custom app).
 //   4. Provide file-open dialogs for images / firmware / custom layouts.
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn, spawnSync } = require('child_process');
+const { pathToFileURL } = require('url');
 const { SerialPort } = require('serialport');
 
 /* ------------------------------------------------------------------ */
@@ -287,6 +288,7 @@ function createWindow() {
         minWidth: 960,
         minHeight: 640,
         title: 'Quote/0 Desktop',
+        backgroundColor: '#0f1115',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -297,7 +299,48 @@ function createWindow() {
         const tag = ['log', 'warn', 'err', 'info'][level] || 'log';
         console.log(`[renderer:${tag}] ${sourceId}:${line} ${message}`);
     });
-    mainWindow.loadFile(path.join(__dirname, 'src/index.html'));
+
+    // Development: point at the Next.js dev server.
+    // Production: load the statically-exported Next.js build from ./out
+    // through the `app://` custom protocol (so absolute paths like
+    // /_next/static/... resolve correctly, which a plain file:// load
+    // would not).
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    if (devUrl) {
+        mainWindow.loadURL(devUrl);
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+    } else {
+        mainWindow.loadURL('app://quote0/index.html');
+    }
+}
+
+/**
+ * Register an `app://` protocol that serves the static Next.js export
+ * from `desktop/out/`.  This is required because Next's static build
+ * emits absolute asset URLs like `/_next/static/...` which would resolve
+ * to the filesystem root under the stock `file://` protocol.
+ *
+ * We use `app://quote0/...` as the root — the `quote0` host is arbitrary
+ * and stays constant so that relative resolution of `/_next/...` stays
+ * inside the export.
+ */
+function registerAppProtocol() {
+    const rootDir = path.join(__dirname, 'out');
+
+    protocol.handle('app', (request) => {
+        const url = new URL(request.url);
+        // url.pathname is "/...something" relative to the host.  We treat
+        // an empty or trailing-slash path as /index.html.
+        let rel = decodeURIComponent(url.pathname || '/');
+        if (rel === '/' || rel.endsWith('/')) rel += 'index.html';
+        rel = rel.replace(/^\/+/, '');
+
+        const filePath = path.normalize(path.join(rootDir, rel));
+        if (!filePath.startsWith(rootDir)) {
+            return new Response('forbidden', { status: 403 });
+        }
+        return net.fetch(pathToFileURL(filePath).toString());
+    });
 }
 
 ipcMain.handle('serial:list', async () => {
@@ -398,7 +441,23 @@ ipcMain.handle('firmware:flashStock', async (event, portPath, binPath) => {
 /* App lifecycle                                                       */
 /* ------------------------------------------------------------------ */
 
-app.whenReady().then(createWindow);
+// Custom protocol scheme MUST be registered before `app.whenReady()`.
+protocol.registerSchemesAsPrivileged([
+    {
+        scheme: 'app',
+        privileges: {
+            standard: true,
+            secure: true,
+            supportFetchAPI: true,
+            corsEnabled: true,
+        },
+    },
+]);
+
+app.whenReady().then(() => {
+    registerAppProtocol();
+    createWindow();
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();

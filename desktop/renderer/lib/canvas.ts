@@ -1,29 +1,37 @@
-// Quote/0 canvas rendering + 1BPP framebuffer packing.
-//
-// The device expects a raw 152x296 1-bit buffer, MSB-first, 1=white.
-// The renderer may be asked to draw at a different *logical* size
-// (landscape-right = 296x152) and then rotated to the controller's native
-// 152x296 portrait.
+/* -------------------------------------------------------------------------
+ * Quote/0 canvas rendering + 1BPP framebuffer packing.
+ *
+ * The device expects a raw 152×296 1-bit buffer, MSB-first, 1 = white.
+ * The renderer may be asked to draw at a different *logical* size (e.g.
+ * landscape-right = 296×152) and then rotated to the controller's native
+ * 152×296 portrait.
+ * ------------------------------------------------------------------------- */
+
+'use client';
+
+import type { ComposeSpec, Fit, Layout } from './types';
 
 export const NATIVE_WIDTH = 152;
 export const NATIVE_HEIGHT = 296;
 export const FRAME_BYTES = (NATIVE_WIDTH * NATIVE_HEIGHT) / 8;
 
+export interface LogicalSize { w: number; h: number }
+
 /** Logical canvas size for a given layout. */
-export function logicalSize(layout) {
+export function logicalSize(layout: Layout): LogicalSize {
     if (layout === 'landscape-left' || layout === 'landscape-right') {
-        return { w: NATIVE_HEIGHT, h: NATIVE_WIDTH };   // 296 x 152
+        return { w: NATIVE_HEIGHT, h: NATIVE_WIDTH };   // 296 × 152
     }
-    return { w: NATIVE_WIDTH, h: NATIVE_HEIGHT };       // 152 x 296
+    return { w: NATIVE_WIDTH, h: NATIVE_HEIGHT };       // 152 × 296
 }
 
 /** Prepare a Canvas 2D context at logical size, filled white. */
-export function createCanvas(layout) {
+function createCanvas(layout: Layout) {
     const { w, h } = logicalSize(layout);
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, w, h);
@@ -34,10 +42,8 @@ export function createCanvas(layout) {
 /* Drawing primitives                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Floyd-Steinberg dither on an ImageData (in place). */
-function floydSteinberg(imageData) {
+function floydSteinberg(imageData: ImageData): void {
     const { data, width, height } = imageData;
-    // Convert to grayscale float array
     const gray = new Float32Array(width * height);
     for (let i = 0; i < gray.length; ++i) {
         const p = i * 4;
@@ -50,10 +56,10 @@ function floydSteinberg(imageData) {
             const nw = old < 128 ? 0 : 255;
             gray[i] = nw;
             const err = old - nw;
-            if (x + 1 < width)           gray[i + 1]           += err * 7 / 16;
-            if (x - 1 >= 0 && y + 1 < height) gray[i + width - 1]   += err * 3 / 16;
-            if (y + 1 < height)          gray[i + width]       += err * 5 / 16;
-            if (x + 1 < width && y + 1 < height) gray[i + width + 1]   += err * 1 / 16;
+            if (x + 1 < width)                    gray[i + 1]         += (err * 7) / 16;
+            if (x - 1 >= 0 && y + 1 < height)     gray[i + width - 1] += (err * 3) / 16;
+            if (y + 1 < height)                   gray[i + width]     += (err * 5) / 16;
+            if (x + 1 < width && y + 1 < height)  gray[i + width + 1] += (err * 1) / 16;
         }
     }
     for (let i = 0; i < gray.length; ++i) {
@@ -63,8 +69,7 @@ function floydSteinberg(imageData) {
     }
 }
 
-/** Threshold an ImageData in place (grayscale cutoff). */
-function applyThreshold(imageData, threshold) {
+function applyThreshold(imageData: ImageData, threshold: number): void {
     const { data } = imageData;
     for (let p = 0; p < data.length; p += 4) {
         const gray = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
@@ -73,8 +78,13 @@ function applyThreshold(imageData, threshold) {
     }
 }
 
-/** Draw an HTMLImageElement into ctx with the given fit mode. */
-function drawImageFit(ctx, img, targetW, targetH, fit) {
+function drawImageFit(
+    ctx: CanvasRenderingContext2D,
+    img: HTMLImageElement,
+    targetW: number,
+    targetH: number,
+    fit: Fit,
+): void {
     const sw = img.naturalWidth;
     const sh = img.naturalHeight;
     if (sw === 0 || sh === 0) return;
@@ -83,17 +93,9 @@ function drawImageFit(ctx, img, targetW, targetH, fit) {
         ctx.drawImage(img, 0, 0, targetW, targetH);
         return;
     }
-    if (fit === 'cover') {
-        const scale = Math.max(targetW / sw, targetH / sh);
-        const dw = sw * scale;
-        const dh = sh * scale;
-        const dx = (targetW - dw) / 2;
-        const dy = (targetH - dh) / 2;
-        ctx.drawImage(img, dx, dy, dw, dh);
-        return;
-    }
-    // contain
-    const scale = Math.min(targetW / sw, targetH / sh);
+    const scale = fit === 'cover'
+        ? Math.max(targetW / sw, targetH / sh)
+        : Math.min(targetW / sw, targetH / sh);
     const dw = sw * scale;
     const dh = sh * scale;
     const dx = (targetW - dw) / 2;
@@ -101,8 +103,7 @@ function drawImageFit(ctx, img, targetW, targetH, fit) {
     ctx.drawImage(img, dx, dy, dw, dh);
 }
 
-/** Load a data URL into an HTMLImageElement. */
-export function loadImage(dataUrl) {
+export function loadImage(dataUrl: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
@@ -115,23 +116,36 @@ export function loadImage(dataUrl) {
 /* High-level render functions                                         */
 /* ------------------------------------------------------------------ */
 
-/** Render a picture with the given options onto a fresh layout canvas. */
-export async function renderImage({ img, layout, fit, threshold, dither }) {
-    const { canvas, ctx, width, height } = createCanvas(layout);
-    drawImageFit(ctx, img, width, height, fit);
+export interface RenderImageOpts {
+    img: HTMLImageElement;
+    layout: Layout;
+    fit: Fit;
+    threshold: number;
+    dither: boolean;
+}
 
+export function renderImage(opts: RenderImageOpts): HTMLCanvasElement {
+    const { canvas, ctx, width, height } = createCanvas(opts.layout);
+    drawImageFit(ctx, opts.img, width, height, opts.fit);
     const imgData = ctx.getImageData(0, 0, width, height);
-    if (dither) {
-        floydSteinberg(imgData);
-    } else {
-        applyThreshold(imgData, threshold);
-    }
+    if (opts.dither) floydSteinberg(imgData);
+    else applyThreshold(imgData, opts.threshold);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
 }
 
-/** Render the three-line text layout. */
-export function renderText({ title, body, footer, layout, titleSize, bodySize, border }) {
+export interface RenderTextOpts {
+    title: string;
+    body: string;
+    footer: string;
+    layout: Layout;
+    titleSize: number;
+    bodySize: number;
+    border: boolean;
+}
+
+export function renderText(opts: RenderTextOpts): HTMLCanvasElement {
+    const { title, body, footer, layout, titleSize, bodySize, border } = opts;
     const { canvas, ctx, width, height } = createCanvas(layout);
 
     ctx.fillStyle = '#000';
@@ -151,7 +165,6 @@ export function renderText({ title, body, footer, layout, titleSize, bodySize, b
             ctx.fillText(line, margin, y);
             y += titleSize + 4;
         }
-        // underline separator
         ctx.beginPath();
         ctx.moveTo(margin, y);
         ctx.lineTo(width - margin, y);
@@ -193,9 +206,9 @@ export function renderText({ title, body, footer, layout, titleSize, bodySize, b
     return canvas;
 }
 
-function wrapText(ctx, text, maxWidth) {
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
     const words = text.split(/(\s+)/);
-    const lines = [];
+    const lines: string[] = [];
     let current = '';
     for (const w of words) {
         if (!w && current === '') continue;
@@ -211,65 +224,91 @@ function wrapText(ctx, text, maxWidth) {
     return lines;
 }
 
-/**
- * Render a compose spec:
- *   { background?, border?, elements: [{type:text|image|rect|line, ...}] }
- * Image elements must have an already-resolved `imageEl` (loaded in renderer.js
- * before calling this function — browsers cannot load arbitrary file paths).
- */
-export async function renderCompose({ spec, layout }) {
+/* ------------------------------------------------------------------ */
+/* Compose                                                             */
+/* ------------------------------------------------------------------ */
+
+export interface RenderComposeOpts {
+    spec: ComposeSpec;
+    layout: Layout;
+}
+
+export function renderCompose({ spec, layout }: RenderComposeOpts): HTMLCanvasElement {
     const { canvas, ctx, width, height } = createCanvas(layout);
 
     const bg = spec.background;
-    if (bg === 'black' || bg === 0 || bg === '#000' || bg === '#000000') {
+    if (bg === 'black') {
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
     }
     if (spec.border) {
-        const b = typeof spec.border === 'object' ? spec.border : {};
-        const inset = b.inset || 0;
-        const bw = b.width || 1;
+        const b = typeof spec.border === 'object' ? (spec.border as Record<string, number>) : {};
+        const inset = (b.inset as number) || 0;
+        const bw = (b.width as number) || 1;
         ctx.strokeStyle = '#000';
         ctx.lineWidth = bw;
         ctx.strokeRect(inset + bw / 2, inset + bw / 2,
                        width - 2 * inset - bw, height - 2 * inset - bw);
     }
 
-    for (const el of (spec.elements || [])) {
-        const t = (el.type || '').toLowerCase();
-        if (t === 'text')  drawComposeText(ctx, el, width, height);
+    for (const el of spec.elements) {
+        const t = String(el.type || '').toLowerCase();
+        if (t === 'text') drawComposeText(ctx, el, width, height);
         else if (t === 'rect') drawComposeRect(ctx, el);
         else if (t === 'line') drawComposeLine(ctx, el);
         else if (t === 'image') drawComposeImage(ctx, el);
     }
 
-    // Composition uses pure black/white drawing already, so no extra threshold.
     return canvas;
 }
 
-function parseColor(value, defaultBlack = true) {
+function parseColor(value: unknown, defaultBlack = true): string {
     if (value == null) return defaultBlack ? '#000' : '#fff';
     if (value === 0 || value === 'black' || value === 'dark' ||
         value === '#000' || value === '#000000') return '#000';
     if (value === 255 || value === 'white' || value === 'light' ||
         value === '#fff' || value === '#ffffff') return '#fff';
-    // numeric gray threshold ≥128 = white
     if (typeof value === 'number') return value >= 128 ? '#fff' : '#000';
     return defaultBlack ? '#000' : '#fff';
 }
 
-function resolveBox(el, canvasW, canvasH) {
+interface Box { x: number; y: number; w: number; h: number }
+
+function resolveBox(el: Record<string, unknown>, canvasW: number, canvasH: number): Box {
     if (Array.isArray(el.rect) && el.rect.length === 4) {
-        return { x: el.rect[0] | 0, y: el.rect[1] | 0, w: el.rect[2] | 0, h: el.rect[3] | 0 };
+        return {
+            x: (el.rect[0] as number) | 0,
+            y: (el.rect[1] as number) | 0,
+            w: (el.rect[2] as number) | 0,
+            h: (el.rect[3] as number) | 0,
+        };
     }
-    const x = (el.x || 0) | 0;
-    const y = (el.y || 0) | 0;
-    const w = (el.w || el.width || canvasW - x) | 0;
-    const h = (el.h || el.height || canvasH - y) | 0;
+    const x = ((el.x as number) || 0) | 0;
+    const y = ((el.y as number) || 0) | 0;
+    const w = ((el.w as number) || (el.width as number) || canvasW - x) | 0;
+    const h = ((el.h as number) || (el.height as number) || canvasH - y) | 0;
     return { x, y, w, h };
 }
 
-function drawComposeText(ctx, el, canvasW, canvasH) {
+interface Padding { top: number; right: number; bottom: number; left: number }
+
+function parsePadding(value: unknown): Padding {
+    const zero = { top: 0, right: 0, bottom: 0, left: 0 };
+    if (value == null) return zero;
+    if (typeof value === 'number') return { top: value, right: value, bottom: value, left: value };
+    if (Array.isArray(value)) {
+        if (value.length === 2) return { top: value[0] | 0, right: value[1] | 0, bottom: value[0] | 0, left: value[1] | 0 };
+        if (value.length === 4) return { top: value[0] | 0, right: value[1] | 0, bottom: value[2] | 0, left: value[3] | 0 };
+    }
+    return zero;
+}
+
+function drawComposeText(
+    ctx: CanvasRenderingContext2D,
+    el: Record<string, unknown>,
+    canvasW: number,
+    canvasH: number,
+): void {
     const box = resolveBox(el, canvasW, canvasH);
     const pad = parsePadding(el.padding);
     const ix = box.x + pad.left;
@@ -277,11 +316,11 @@ function drawComposeText(ctx, el, canvasW, canvasH) {
     const iw = Math.max(1, box.w - pad.left - pad.right);
     const ih = Math.max(1, box.h - pad.top - pad.bottom);
 
-    const fontSize = el.font_size || 16;
+    const fontSize = (el.font_size as number) || 16;
     const fill = parseColor(el.fill, true);
-    const align = (el.align || 'left').toLowerCase();
-    const valign = (el.valign || 'top').toLowerCase();
-    const lineSpacing = el.line_spacing != null ? el.line_spacing : 4;
+    const align = String(el.align || 'left').toLowerCase();
+    const valign = String(el.valign || 'top').toLowerCase();
+    const lineSpacing = el.line_spacing != null ? (el.line_spacing as number) : 4;
 
     ctx.fillStyle = fill;
     ctx.font = `${fontSize}px -apple-system, "Segoe UI", sans-serif`;
@@ -289,10 +328,9 @@ function drawComposeText(ctx, el, canvasW, canvasH) {
 
     const text = String(el.text || '');
     const paragraphs = text.split(/\r?\n/);
-    const lines = [];
-    for (const p of paragraphs) {
-        lines.push(...wrapText(ctx, p, iw));
-    }
+    const lines: string[] = [];
+    for (const p of paragraphs) lines.push(...wrapText(ctx, p, iw));
+
     const stride = fontSize + lineSpacing;
     const blockHeight = lines.length * fontSize + (lines.length - 1) * lineSpacing;
     let y0 = iy;
@@ -311,25 +349,14 @@ function drawComposeText(ctx, el, canvasW, canvasH) {
     }
 }
 
-function parsePadding(value) {
-    const zero = { top: 0, right: 0, bottom: 0, left: 0 };
-    if (value == null) return zero;
-    if (typeof value === 'number') return { top: value, right: value, bottom: value, left: value };
-    if (Array.isArray(value)) {
-        if (value.length === 2) return { top: value[0] | 0, right: value[1] | 0, bottom: value[0] | 0, left: value[1] | 0 };
-        if (value.length === 4) return { top: value[0] | 0, right: value[1] | 0, bottom: value[2] | 0, left: value[3] | 0 };
-    }
-    return zero;
-}
-
-function drawComposeRect(ctx, el) {
+function drawComposeRect(ctx: CanvasRenderingContext2D, el: Record<string, unknown>): void {
     const box = resolveBox(el, ctx.canvas.width, ctx.canvas.height);
-    const lineWidth = el.width || 1;
-    if (el.fill != null) {
+    const lineWidth = (el.width as number) || 1;
+    if (el.fill) {
         ctx.fillStyle = parseColor(el.fill);
         ctx.fillRect(box.x, box.y, box.w, box.h);
     }
-    if (el.outline != null) {
+    if (el.outline) {
         ctx.strokeStyle = parseColor(el.outline);
         ctx.lineWidth = lineWidth;
         ctx.strokeRect(box.x + lineWidth / 2, box.y + lineWidth / 2,
@@ -337,42 +364,43 @@ function drawComposeRect(ctx, el) {
     }
 }
 
-function drawComposeLine(ctx, el) {
+function drawComposeLine(ctx: CanvasRenderingContext2D, el: Record<string, unknown>): void {
     const fill = parseColor(el.fill, true);
-    const lw = el.width || 1;
+    const lw = (el.width as number) || 1;
     ctx.strokeStyle = fill;
     ctx.lineWidth = lw;
     ctx.beginPath();
-    if (Array.isArray(el.points) && el.points.length >= 2) {
-        const [sx, sy] = el.points[0];
+    const pts = el.points as Array<[number, number]> | undefined;
+    if (Array.isArray(pts) && pts.length >= 2) {
+        const [sx, sy] = pts[0];
         ctx.moveTo(sx | 0, sy | 0);
-        for (let i = 1; i < el.points.length; ++i) {
-            const [x, y] = el.points[i];
+        for (let i = 1; i < pts.length; ++i) {
+            const [x, y] = pts[i];
             ctx.lineTo(x | 0, y | 0);
         }
     } else {
-        ctx.moveTo((el.x1 || 0) | 0, (el.y1 || 0) | 0);
-        ctx.lineTo((el.x2 || 0) | 0, (el.y2 || 0) | 0);
+        ctx.moveTo(((el.x1 as number) || 0) | 0, ((el.y1 as number) || 0) | 0);
+        ctx.lineTo(((el.x2 as number) || 0) | 0, ((el.y2 as number) || 0) | 0);
     }
     ctx.stroke();
 }
 
-function drawComposeImage(ctx, el) {
+function drawComposeImage(ctx: CanvasRenderingContext2D, el: Record<string, unknown>): void {
     const box = resolveBox(el, ctx.canvas.width, ctx.canvas.height);
-    if (!el.imageEl) return;
-    const fit = (el.fit || 'contain').toLowerCase();
+    const imageEl = el.imageEl as HTMLImageElement | undefined;
+    if (!imageEl) return;
+    const fit = String(el.fit || 'contain').toLowerCase() as Fit;
     ctx.save();
     ctx.beginPath();
     ctx.rect(box.x, box.y, box.w, box.h);
     ctx.clip();
     ctx.translate(box.x, box.y);
-    drawImageFit(ctx, el.imageEl, box.w, box.h, fit);
+    drawImageFit(ctx, imageEl, box.w, box.h, fit);
     ctx.restore();
 
-    // Threshold this image rect only.
     const imgData = ctx.getImageData(box.x, box.y, box.w, box.h);
     if (el.dither) floydSteinberg(imgData);
-    else applyThreshold(imgData, el.threshold != null ? el.threshold : 160);
+    else applyThreshold(imgData, el.threshold != null ? (el.threshold as number) : 160);
     ctx.putImageData(imgData, box.x, box.y);
 }
 
@@ -380,20 +408,14 @@ function drawComposeImage(ctx, el) {
 /* Rotation + framebuffer packing                                      */
 /* ------------------------------------------------------------------ */
 
-/**
- * Rotate the drawn canvas into the native 152x296 portrait orientation
- * expected by the UC8251D.  Returns a new canvas sized 152x296.
- */
-export function rotateToNative(sourceCanvas, layout) {
+export function rotateToNative(sourceCanvas: HTMLCanvasElement, layout: Layout): HTMLCanvasElement {
     const out = document.createElement('canvas');
     out.width = NATIVE_WIDTH;
     out.height = NATIVE_HEIGHT;
-    const ctx = out.getContext('2d');
+    const ctx = out.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, NATIVE_WIDTH, NATIVE_HEIGHT);
-
-    const { w, h } = logicalSize(layout);
 
     if (layout === 'native') {
         ctx.drawImage(sourceCanvas, 0, 0);
@@ -402,7 +424,6 @@ export function rotateToNative(sourceCanvas, layout) {
         ctx.rotate(Math.PI);
         ctx.drawImage(sourceCanvas, 0, 0);
     } else if (layout === 'landscape-right') {
-        // Logical 296x152 → native 152x296 rotated 90° CW.
         ctx.translate(NATIVE_WIDTH, 0);
         ctx.rotate(Math.PI / 2);
         ctx.drawImage(sourceCanvas, 0, 0);
@@ -416,16 +437,16 @@ export function rotateToNative(sourceCanvas, layout) {
     return out;
 }
 
-/**
- * Pack a 152x296 canvas into a 5624-byte 1BPP buffer.
- * Convention: MSB-first per byte, 1 = white, 0 = black.
- * This matches tools/quote0_send.py (`pack_pixels`).
- */
-export function packNativeToFramebuffer(nativeCanvas, { invert = false } = {}) {
+export interface PackOpts { invert?: boolean }
+
+export function packNativeToFramebuffer(
+    nativeCanvas: HTMLCanvasElement,
+    { invert = false }: PackOpts = {},
+): Uint8Array {
     if (nativeCanvas.width !== NATIVE_WIDTH || nativeCanvas.height !== NATIVE_HEIGHT) {
         throw new Error(`expected ${NATIVE_WIDTH}x${NATIVE_HEIGHT} canvas`);
     }
-    const ctx = nativeCanvas.getContext('2d', { willReadFrequently: true });
+    const ctx = nativeCanvas.getContext('2d', { willReadFrequently: true })!;
     const { data } = ctx.getImageData(0, 0, NATIVE_WIDTH, NATIVE_HEIGHT);
     const out = new Uint8Array(FRAME_BYTES);
 
@@ -436,20 +457,26 @@ export function packNativeToFramebuffer(nativeCanvas, { invert = false } = {}) {
             const gray = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
             let white = gray >= 128 ? 1 : 0;
             if (invert) white = white ? 0 : 1;
-            if (white) {
-                out[bit >> 3] |= 0x80 >> (bit & 7);
-            }
+            if (white) out[bit >> 3] |= 0x80 >> (bit & 7);
             bit++;
         }
     }
     return out;
 }
 
-/** Convenience hash to display "did the preview actually change?" */
-export function hashBuffer(buf) {
+export function hashBuffer(buf: Uint8Array): string {
     let h = 5381;
     for (let i = 0; i < buf.length; ++i) {
         h = ((h << 5) + h + buf[i]) & 0xffffffff;
     }
     return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+export function countBits(buf: Uint8Array): number {
+    let n = 0;
+    for (let i = 0; i < buf.length; ++i) {
+        let b = buf[i];
+        while (b) { n += b & 1; b >>>= 1; }
+    }
+    return n;
 }

@@ -1,0 +1,161 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -------------------------------------------------------------------------
+ * Global element defaults
+ * ------------------------------------------------------------------------- */
+
+html, body, #__next {
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+body {
+    background-color: theme('colors.bg');
+    color: theme('colors.fg');
+    font-family: theme('fontFamily.ui');
+    font-size: 13px; /* dense — matches the desktop high-density workbench */
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+::selection {
+    background: rgb(93 173 226 / 0.2);
+    color: theme('colors.fg');
+}
+
+/* Focus ring for keyboard users only */
+:focus { outline: none; }
+:focus-visible {
+    outline: 2px solid theme('colors.primary');
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0ms !important;
+        transition-duration: 0ms !important;
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Shared panel shell
+ * ------------------------------------------------------------------------- */
+
+.panel-shell {
+    background: theme('colors.surface-1');
+    border: 1px solid theme('colors.border');
+    border-radius: 6px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.section-heading {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: theme('colors.fg-muted');
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Preview stage — subtle gradient + dot pattern (replaces checkerboard) */
+.preview-stage {
+    background: radial-gradient(ellipse at center, #1c222b 0%, #0d1015 100%);
+}
+.preview-stage::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 16px 16px;
+    pointer-events: none;
+    border-radius: inherit;
+}
+
+.image-pixelated { image-rendering: pixelated; }
+
+/* -------------------------------------------------------------------------
+ * Custom checkbox (match design system)
+ * ------------------------------------------------------------------------- */
+
+.app-checkbox {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    border: 1px solid theme('colors.border-strong');
+    background: theme('colors.input-bg');
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.app-checkbox:hover { border-color: theme('colors.primary'); }
+.app-checkbox:checked {
+    background: theme('colors.primary');
+    border-color: theme('colors.primary');
+}
+.app-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid theme('colors.fg-inverse');
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+/* -------------------------------------------------------------------------
+ * Custom range slider
+ * ------------------------------------------------------------------------- */
+
+.slider-range::-webkit-slider-runnable-track {
+    height: 4px;
+    background: theme('colors.surface-3');
+    border-radius: 999px;
+}
+.slider-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    background: theme('colors.primary');
+    border: 2px solid theme('colors.surface-1');
+    border-radius: 50%;
+    cursor: pointer;
+    transition: box-shadow 120ms ease;
+}
+.slider-range:hover::-webkit-slider-thumb,
+.slider-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px rgb(93 173 226 / 0.2);
+}
+
+/* -------------------------------------------------------------------------
+ * Scrollbar
+ * ------------------------------------------------------------------------- */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: theme('colors.surface-3');
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background-color: theme('colors.border-strong');
+    background-clip: padding-box;
+}
