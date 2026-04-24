@@ -12,8 +12,8 @@
     "start": "npm run build && electron .",
     "lint": "cd renderer && next lint",
     "typecheck": "tsc --noEmit -p renderer/tsconfig.json",
-    "package:mac-arm64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\"",
-    "package:mac-x64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\"",
+    "package:mac-arm64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=arm64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-arm64/Quote0.app",
+    "package:mac-x64": "npm run build && electron-packager . Quote0 --overwrite --platform=darwin --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\" && codesign --deep --force --sign - dist/Quote0-darwin-x64/Quote0.app",
     "package:linux": "npm run build && electron-packager . Quote0 --overwrite --platform=linux --arch=x64 --out=dist --extra-resource=../.release/firmware-resources --asar --prune=true --ignore=\"^/renderer$\" --ignore=\"^/\\.next$\""
   },
   "author": "stvlynn",
